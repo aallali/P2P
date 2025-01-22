@@ -39,9 +39,10 @@ def main():
 
     elif choice == 'c':
         # Client mode
-        host = input("Enter the server IP: ").strip()
+        host = input("Enter the server IP: ").strip()  # Example: 0.tcp.eu.ngrok.io
+        port = int(input("Enter the port: ").strip())  # Example: 14501
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.connect((host, 12345))
+        client.connect((host, port))
         print("Connected to the server!")
 
         # Start threads for sending and receiving
