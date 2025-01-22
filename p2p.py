@@ -12,6 +12,24 @@ def read_config():
     return host, port
 
 
+# Watch for file changes
+def watch_file(sock, file_path):
+    last_modified = None
+    while True:
+        try:
+            current_modified = os.path.getmtime(file_path)
+            if last_modified is None:
+                last_modified = current_modified
+
+            if current_modified != last_modified:
+                last_modified = current_modified
+                print(f"File changed: {file_path}. Sending updated file...")
+                send_file(sock, file_path)
+        except Exception as e:
+            print(f"Error watching file: {e}")
+            break
+
+
 # Function to handle sending messages
 def send_messages(sock):
     while True:
@@ -19,6 +37,10 @@ def send_messages(sock):
         if message.startswith("/file "):
             file_path = message.split(" ", 1)[1]
             send_file(sock, file_path)
+            # Start watching the file for changes
+            threading.Thread(
+                target=watch_file, args=(sock, file_path), daemon=True
+            ).start()
         else:
             sock.sendall(message.encode())
 
