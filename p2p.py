@@ -1,5 +1,6 @@
 import socket
 import threading
+import os
 import signal
 import sys
 
@@ -15,7 +16,11 @@ def read_config():
 def send_messages(sock):
     while True:
         message = input("You: ")
-        sock.sendall(message.encode())
+        if message.startswith("/file "):
+            file_path = message.split(" ", 1)[1]
+            send_file(sock, file_path)
+        else:
+            sock.sendall(message.encode())
 
 
 # Function to handle receiving messages
@@ -23,13 +28,50 @@ def receive_messages(sock):
     while True:
         try:
             message = sock.recv(1024).decode()
-            if message:
+            if message.startswith("/file "):
+                file_name = message.split(" ", 1)[1]
+                receive_file(sock, file_name)
+            elif message:
                 print(f"\nFriend: {message}")
             else:
                 break
-        except:
-            print("\nConnection closed.")
+        except Exception as e:
+            print(f"\nConnection closed: {e}")
             break
+
+
+# Function to send a file
+def send_file(sock, file_path):
+    if not os.path.exists(file_path):
+        print(f"File not found: {file_path}")
+        return
+    try:
+        file_name = os.path.basename(file_path)
+        sock.sendall(f"/file {file_name}".encode())
+
+        with open(file_path, "rb") as f:
+            while chunk := f.read(1024):
+                sock.sendall(chunk)
+        # Send an EOF marker
+        sock.sendall(b"EOF")
+        print(f"File sent: {file_path}")
+    except Exception as e:
+        print(f"Error sending file: {e}")
+
+
+# Function to receive a file
+def receive_file(sock, file_name):
+    try:
+        with open(file_name, "wb") as f:
+            while True:
+                chunk = sock.recv(1024)
+                if b"EOF" in chunk:
+                    f.write(chunk.replace(b"EOF", b""))
+                    break
+                f.write(chunk)
+        print(f"File received: {file_name}")
+    except Exception as e:
+        print(f"Error receiving file: {e}")
 
 
 # Handle graceful shutdown
