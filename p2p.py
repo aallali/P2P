@@ -1,5 +1,7 @@
 import socket
 import threading
+import signal
+import sys
 
 
 def read_config():
@@ -30,6 +32,13 @@ def receive_messages(sock):
             break
 
 
+# Handle graceful shutdown
+def shutdown_server(server):
+    print("\nShutting down server...")
+    server.close()
+    sys.exit(0)
+
+
 # Main function to start the server or client
 def main():
     choice = (
@@ -44,12 +53,20 @@ def main():
         server.bind(("0.0.0.0", port))
         server.listen(1)
         print("Waiting for a connection...")
-        conn, addr = server.accept()
-        print(f"Connected to {addr}")
 
-        # Start threads for sending and receiving
-        threading.Thread(target=send_messages, args=(conn,)).start()
-        threading.Thread(target=receive_messages, args=(conn,)).start()
+        # Handle Ctrl+C gracefully
+        signal.signal(signal.SIGINT, lambda sig, frame: shutdown_server(server))
+
+        while True:
+            try:
+                conn, addr = server.accept()
+                print(f"Connected to {addr}")
+
+                # Start threads for sending and receiving
+                threading.Thread(target=send_messages, args=(conn,)).start()
+                threading.Thread(target=receive_messages, args=(conn,)).start()
+            except Exception as e:
+                print(f"Error: {e}")
 
     elif choice == "c":
         # Client mode
