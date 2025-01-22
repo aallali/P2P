@@ -4,6 +4,9 @@ import os
 import signal
 import sys
 
+# Track the current file to send
+current_file = None
+
 
 def read_config():
     with open("config.txt") as f:
@@ -12,47 +15,44 @@ def read_config():
     return host, port
 
 
-# Watch for file changes
-def watch_file(sock, file_path):
-    last_modified = None
+def send_messages(sock):
+    global current_file
     while True:
         try:
-            current_modified = os.path.getmtime(file_path)
-            if last_modified is None:
-                last_modified = current_modified
-
-            if current_modified != last_modified:
-                last_modified = current_modified
-                print(f"File changed: {file_path}. Sending updated file...")
-                send_file(sock, file_path)
+            message = input("You: ")
+            if message.startswith("/file "):
+                file_path = message.split(" ", 1)[1].strip()
+                if os.path.exists(file_path):
+                    current_file = file_path  # Update the current file
+                    print(f"File set for sending: {file_path}")
+                    send_file(sock, current_file)
+                else:
+                    print(f"File not found: {file_path}")
+            elif message == "/send":
+                if current_file:
+                    send_file(sock, current_file)
+                else:
+                    print("No file set. Use /file <path> to set a file first.")
+            else:
+                sock.sendall(message.strip().encode())
         except Exception as e:
-            print(f"Error watching file: {e}")
+            print(f"Error sending message: {e}")
             break
 
 
-# Function to handle sending messages
-def send_messages(sock):
-    while True:
-        message = input("You: ")
-        if message.startswith("/file "):
-            file_path = message.split(" ", 1)[1]
-            send_file(sock, file_path)
-            # Start watching the file for changes
-            threading.Thread(
-                target=watch_file, args=(sock, file_path), daemon=True
-            ).start()
-        else:
-            sock.sendall(message.encode())
-
-
-# Function to handle receiving messages
 def receive_messages(sock):
     while True:
         try:
-            message = sock.recv(1024).decode()
+            message = sock.recv(1024).decode().strip()
             if message.startswith("/file "):
-                file_name = message.split(" ", 1)[1]
-                receive_file(sock, file_name)
+                # Extract file name and size from the header
+                header_parts = message.split(" ", 2)
+                if len(header_parts) < 3:
+                    print("Invalid file header received.")
+                    continue
+                file_name = header_parts[1].strip()
+                file_size = int(header_parts[2].strip())
+                receive_file(sock, file_name, file_size)
             elif message:
                 print(f"\nFriend: {message}")
             else:
@@ -62,48 +62,58 @@ def receive_messages(sock):
             break
 
 
-# Function to send a file
 def send_file(sock, file_path):
-    if not os.path.exists(file_path):
-        print(f"File not found: {file_path}")
-        return
     try:
-        file_name = os.path.basename(file_path)
-        sock.sendall(f"/file {file_name}".encode())
+        file_name = os.path.basename(file_path).strip()
+        file_size = os.path.getsize(file_path)
+        sock.sendall(f"/file {file_name} {file_size}\n".encode())
 
+        # Add progress tracking
+        sent = 0
         with open(file_path, "rb") as f:
             while chunk := f.read(1024):
                 sock.sendall(chunk)
-        # Send an EOF marker
-        sock.sendall(b"EOF")
-        print(f"File sent: {file_path}")
+                sent += len(chunk)
+                print(
+                    f"\rSending: {sent}/{file_size} bytes ({int(sent/file_size*100)}%)",
+                    end="",
+                )
+        print(f"\nFile sent: {file_path}")
     except Exception as e:
         print(f"Error sending file: {e}")
 
 
-# Function to receive a file
-def receive_file(sock, file_name):
+def receive_file(sock, file_name, file_size):
     try:
+        received = 0
         with open(file_name, "wb") as f:
-            while True:
-                chunk = sock.recv(1024)
-                if b"EOF" in chunk:
-                    f.write(chunk.replace(b"EOF", b""))
-                    break
+            while received < file_size:
+                chunk = sock.recv(min(1024, file_size - received))
+                if not chunk:
+                    raise Exception("Connection closed before receiving full file")
                 f.write(chunk)
-        print(f"File received: {file_name}")
+                received += len(chunk)
+                print(
+                    f"\rReceiving: {received}/{file_size} bytes ({int(received/file_size*100)}%)",
+                    end="",
+                )
+        print(f"\nFile received: {file_name}")
     except Exception as e:
         print(f"Error receiving file: {e}")
 
 
-# Handle graceful shutdown
-def shutdown_server(server):
+def shutdown_server(server, connections):
     print("\nShutting down server...")
-    server.close()
-    sys.exit(0)
+    try:
+        for conn in connections:
+            conn.close()
+        server.close()
+        sys.exit(0)
+    except Exception as e:
+        print(f"Error during shutdown: {e}")
+        sys.exit(1)
 
 
-# Main function to start the server or client
 def main():
     choice = (
         input("Type 's' to start as server or 'c' to connect as client: ")
@@ -118,12 +128,18 @@ def main():
         server.listen(1)
         print("Waiting for a connection...")
 
+        connections = []
+
         # Handle Ctrl+C gracefully
-        signal.signal(signal.SIGINT, lambda sig, frame: shutdown_server(server))
+        def signal_handler(sig, frame):
+            shutdown_server(server, connections)
+
+        signal.signal(signal.SIGINT, signal_handler)
 
         while True:
             try:
                 conn, addr = server.accept()
+                connections.append(conn)
                 print(f"Connected to {addr}")
 
                 # Start threads for sending and receiving
