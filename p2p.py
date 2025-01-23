@@ -2,6 +2,64 @@ import socket
 import threading
 import os
 import sys
+from datetime import datetime
+import logging
+
+
+# ANSI colors for terminal
+class Colors:
+    ME = "\033[96m"  # Cyan for my messages
+    HIM = "\033[95m"  # Purple for their messages
+    INFO = "\033[94m"  # Blue for system info
+    SUCCESS = "\033[92m"  # Green for success
+    WARNING = "\033[93m"  # Yellow for warnings
+    ERROR = "\033[91m"  # Red for errors
+    RESET = "\033[0m"
+
+
+def setup_logger():
+    class P2PFormatter(logging.Formatter):
+        def format(self, record):
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Get message color based on role
+            color = (
+                Colors.ME
+                if record.role == "ME"
+                else (
+                    Colors.HIM
+                    if record.role == "HIM"
+                    else Colors.ERROR if record.levelname == "ERROR" else Colors.INFO
+                )
+            )
+
+            # Format: [time][role][type] colored_message
+            return f"[{timestamp}][{record.role}][{record.msg_type}] {color}{record.msg}{Colors.RESET}"
+
+    # Create logger
+    logger = logging.getLogger("p2p")
+    logger.setLevel(logging.INFO)
+
+    # File handler - no colors
+    fh = logging.FileHandler("p2p.log")
+    fh.setFormatter(
+        logging.Formatter("[%(asctime)s][%(role)s][%(msg_type)s] %(message)s")
+    )
+
+    # Console handler - with colors
+    ch = logging.StreamHandler()
+    ch.setFormatter(P2PFormatter())
+
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+    return logger
+
+
+def log(msg, role="SYSTEM", msg_type="INFO"):
+    logger = logging.getLogger("p2p")
+    level = logging.ERROR if msg_type == "ERROR" else logging.INFO
+    logger.log(level, msg, extra={"role": role, "msg_type": msg_type})
+
 
 # Track the current file to send
 current_file = None
@@ -47,12 +105,11 @@ def send_file(sock, file_path):
                 sock.sendall(chunk)
                 sent += len(chunk)
                 print(
-                    f"\rSending: {sent}/{file_size} bytes ({int(sent/file_size*100)}%)",
-                    end="",
+                    f"\n[Sending: {sent}/{file_size} bytes ({int(sent/file_size*100)}%)]"
                 )
-        print(f"\nFile sent: {file_name}")
+        log(f"File sent: {file_name}", "ME", "FILE")
     except Exception as e:
-        print(f"Error sending file: {e}")
+        log(f"Error sending file: {e}", "SYSTEM", "ERROR")
 
 
 def receive_file(sock, file_name, file_size):
@@ -78,28 +135,29 @@ def send_messages(sock):
     global current_file
     while True:
         try:
-            message = input("You: ")
+            message = input("")
             if message.startswith("/file "):
                 file_path = message.split(" ", 1)[1].strip()
                 if os.path.exists(file_path):
                     current_file = file_path
-                    print(f"Current file set to: {file_path}")
+                    log(f"Selected: {file_path}", "ME", "FILE")
                     send_file(sock, current_file)
                 else:
-                    print(f"File not found: {file_path}")
+                    log(f"File not found: {file_path}", "SYSTEM", "ERROR")
             elif message == "/send":
                 if current_file and os.path.exists(current_file):
-                    print(f"Resending file: {current_file}")
+                    log(f"Resending: {current_file}", "ME", "FILE")
                     send_file(sock, current_file)
                 else:
-                    print("No file selected. Use /file first")
+                    log("No file selected", "SYSTEM", "ERROR")
             elif message in ["/close", "/c"]:
-                print("Closing connection...")
+                log("Closing connection", "SYSTEM", "INFO")
                 close_socket(sock)
             else:
+                log(message, "ME", "CHAT")
                 sock.sendall(message.encode())
         except Exception as e:
-            print(f"Error: {e}")
+            log(str(e), "SYSTEM", "ERROR")
             break
 
 
@@ -108,20 +166,21 @@ def receive_messages(sock):
         try:
             message = sock.recv(1024).decode()
             if not message:
-                print("\nConnection closed by peer")
+                log("Connection closed by peer", "SYSTEM", "WARNING")
                 break
-
             if message.startswith("/file "):
                 _, file_name, file_size = message.strip().split(" ")
+                log(f"Receiving: {file_name} ({file_size} bytes)", "HIM", "FILE")
                 receive_file(sock, file_name, int(file_size))
             else:
-                print(f"\nFriend: {message}")
+                log(message, "HIM", "CHAT")
         except Exception as e:
-            print(f"\nError: {e}")
+            log(str(e), "SYSTEM", "ERROR")
             break
 
 
 def main():
+    logger = setup_logger()
     print(f"Process ID: {os.getpid()}")
     choice = (
         input("Type 's' to start as server or 'c' to connect as client: ")
