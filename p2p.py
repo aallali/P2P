@@ -1,3 +1,14 @@
+# ************************************************************************** #
+#   Copyright © hi@allali.me                                                 #
+#                                                                            #
+#   File    : p2p.py                                                         #
+#   Project : p2p                                                            #
+#   License : MIT                                                            #
+#                                                                            #
+#   Created: 2025/01/22 17:17:48 by aallali                                  #
+#   Updated: 2025/01/23 13:32:35 by aallali                                  #
+# ************************************************************************** #
+
 import socket
 import threading
 import os
