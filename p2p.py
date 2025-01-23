@@ -22,6 +22,9 @@ RECEIVED_FILES_DIR = "received_files"
 # Track the current file to send
 current_file = None
 
+FILE_HEADER = "FILE_TRANSFER"
+END_OF_FILE = "EOF"
+
 
 def close_socket(sock):
     try:
@@ -38,7 +41,7 @@ def send_file(sock, file_path):
     try:
         file_name = os.path.basename(file_path)
         file_size = os.path.getsize(file_path)
-        sock.sendall(f"/file {file_name} {file_size}".encode())
+        sock.sendall(f"{FILE_HEADER} {file_name} {file_size}".encode())
 
         sent = 0
         with open(file_path, "rb") as f:
@@ -47,8 +50,10 @@ def send_file(sock, file_path):
                 sent += len(chunk)
                 bytes_sent = f"{sent}/{file_size} bytes"
                 bytes_percent = int(sent / file_size * 100)
-                log(f"Sending: {bytes_sent} ({bytes_percent}%)", "SYSTEM", "FILE")
-        log(f"File sent: {file_name} [{file_size} btyes]", "ME", "FILE")
+                if sent % (file_size // 10) == 0:
+                    log(f"Sending: {bytes_sent} ({bytes_percent}%)", "SYSTEM", "FILE")
+        sock.sendall(END_OF_FILE.encode())
+        log(f"File sent: {file_name} [{file_size} bytes]", "ME", "FILE")
     except Exception as e:
         log(f"Error sending file: {e}", "SYSTEM", "ERROR")
 
@@ -73,11 +78,12 @@ def receive_file(sock, file_name, file_size):
                 received += len(chunk)
                 bytes_received = f"{received}/{file_size} bytes"
                 bytes_percent = int(received / file_size * 100)
-                log(
-                    f"Receiving: {bytes_received} ({bytes_percent}%)",
-                    "SYSTEM",
-                    "FILE",
-                )
+                if received % (file_size // 10) == 0:
+                    log(
+                        f"Receiving: {bytes_received} ({bytes_percent}%)",
+                        "SYSTEM",
+                        "FILE",
+                    )
         log(f"File received: {file_name} [{file_size} bytes]", "SYSTEM", "FILE")
     except Exception as e:
         log(f"Error receiving file: {e}", "SYSTEM", "FILE")
@@ -101,7 +107,7 @@ def send_messages(sock):
                     log(f"Resending: {current_file}", "ME", "FILE")
                     send_file(sock, current_file)
                 else:
-                    log("No file selected", "SYSTEM", "ERROR")
+                    log("No file selected or file not found", "SYSTEM", "ERROR")
             elif message in ["/close", "/c"]:
                 log("Closing connection", "SYSTEM", "INFO")
                 close_socket(sock)
@@ -116,16 +122,24 @@ def send_messages(sock):
 def receive_messages(sock):
     while True:
         try:
-            message = sock.recv(1024).decode()
-            if not message:
+            raw_message = sock.recv(1024)
+            if not raw_message:
                 log("Connection closed by peer", "SYSTEM", "WARNING")
                 break
-            if message.startswith("/file "):
-                _, file_name, file_size = message.strip().split(" ")
-                log(f"Receiving: {file_name} ({file_size} bytes)", "HIM", "FILE")
-                receive_file(sock, file_name, int(file_size))
-            else:
-                log(message, "HIM", "CHAT")
+
+            try:
+                message = raw_message.decode()
+                if message.startswith(FILE_HEADER):
+                    _, file_name, file_size = message.split(" ", 2)
+                    receive_file(sock, file_name, int(file_size))
+                elif message == END_OF_FILE:
+                    log("File transfer complete", "SYSTEM", "FILE")
+                else:
+                    log(message, "HIM", "CHAT")
+            except UnicodeDecodeError:
+                log("Received corrupt message", "SYSTEM", "ERROR")
+                continue
+
         except Exception as e:
             log(str(e), "SYSTEM", "ERROR")
             break
