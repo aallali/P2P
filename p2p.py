@@ -31,7 +31,7 @@ def setup_logger():
                 elif record.role == "HIM":
                     color = Colors.HIM
                 elif record.role == "SYSTEM":
-                    color = Colors.INFO
+                    color = Colors.WARNING
                 else:
                     color = Colors.RESET
             else:
@@ -122,8 +122,8 @@ def send_file(sock, file_path):
                 sent += len(chunk)
                 bytes_sent = f"{sent}/{file_size} bytes"
                 bytes_percent = int(sent / file_size * 100)
-                print(f"\r[Sending: {bytes_sent} ({bytes_percent}%)]", end="")
-        log(f"\nFile sent: {file_name} [{file_size} btyes]", "ME", "FILE")
+                log(f"Sending: {bytes_sent} ({bytes_percent}%)", "SYSTEM", "FILE")
+        log(f"File sent: {file_name} [{file_size} btyes]", "ME", "FILE")
     except Exception as e:
         log(f"Error sending file: {e}", "SYSTEM", "ERROR")
 
@@ -140,8 +140,12 @@ def receive_file(sock, file_name, file_size):
                 received += len(chunk)
                 bytes_received = f"{received}/{file_size} bytes"
                 bytes_percent = int(received / file_size * 100)
-                print(f"\r[Receiving: {bytes_received} ({bytes_percent}%)]", end="")
-        log(f"\nFile received: {file_name} [{file_size} btyes]", "SYSTEM", "FILE")
+                log(
+                    f"Receiving: {bytes_received} ({bytes_percent}%)",
+                    "SYSTEM",
+                    "FILE",
+                )
+        log(f"File received: {file_name} [{file_size} btyes]", "SYSTEM", "FILE")
     except Exception as e:
         log(f"Error receiving file: {e}", "SYSTEM", "FILE")
 
