@@ -92,6 +92,20 @@ python3 p2p.py -c
 [2025-01-23 13:06:24][ME][INFO] File sent: chat.txt [18 bytes]
 ```
 
+#### Folder Structure after file exchange:
+```bash
+➜  p2p git:(master) ✗ tree
+.
+├── .p2p.conf
+├── p2p.log
+├── p2p.py
+├── README.md
+└── received_files
+    └── chat.txt
+
+2 directories, 5 files
+➜  p2p git:(master) ✗
+```
 ## Requirements
 - Python 3.x
 
