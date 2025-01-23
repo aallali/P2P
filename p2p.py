@@ -7,6 +7,10 @@ import logging
 import argparse
 import time
 
+RECEIVED_FILES_DIR = "received_files"
+# Track the current file to send
+current_file = None
+
 
 # ANSI colors for terminal
 class Colors:
@@ -77,10 +81,6 @@ def log(msg, role="SYSTEM", msg_type="INFO"):
     logger.log(level, msg, extra={"role": role, "msg_type": msg_type})
 
 
-# Track the current file to send
-current_file = None
-
-
 def read_config():
     config_paths = [
         ".p2p.conf",  # Hidden local config
@@ -128,11 +128,10 @@ def send_file(sock, file_path):
         log(f"Error sending file: {e}", "SYSTEM", "ERROR")
 
 
-RECEIVED_FILES_DIR = "received_files"
-
 def setup_received_files_dir():
     if not os.path.exists(RECEIVED_FILES_DIR):
         os.makedirs(RECEIVED_FILES_DIR)
+
 
 def receive_file(sock, file_name, file_size):
     try:
