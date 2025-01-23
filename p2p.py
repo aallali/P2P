@@ -22,36 +22,50 @@ def setup_logger():
         def format(self, record):
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            # Get message color based on role
-            color = (
-                Colors.ME
-                if record.role == "ME"
-                else (
-                    Colors.HIM
-                    if record.role == "HIM"
-                    else Colors.ERROR if record.levelname == "ERROR" else Colors.INFO
-                )
-            )
+            # Determine role and assign color
+            if hasattr(record, "role"):
+                if record.role == "ME":
+                    color = Colors.ME
+                elif record.role == "HIM":
+                    color = Colors.HIM
+                elif record.role == "SYSTEM":
+                    color = Colors.INFO
+                else:
+                    color = Colors.RESET
+            else:
+                color = Colors.RESET
 
-            # Format: [time][role][type] colored_message
-            return f"[{timestamp}][{record.role}][{record.msg_type}] {color}{record.msg}{Colors.RESET}"
+            # Determine message type color
+            if record.levelname == "ERROR":
+                msg_color = Colors.ERROR
+            elif record.levelname == "WARNING":
+                msg_color = Colors.WARNING
+            elif record.levelname == "SUCCESS":
+                msg_color = Colors.SUCCESS
+            else:
+                msg_color = color  # Default to role color
 
-    # Create logger
+            # Format the message with colors
+            formatted_message = f"{color}[{timestamp}][{record.role}][{record.levelname}] {msg_color}{record.getMessage()}{Colors.RESET}"
+            return formatted_message
+
     logger = logging.getLogger("p2p")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)  # Set to DEBUG to capture all levels
 
-    # File handler - no colors
-    fh = logging.FileHandler("p2p.log")
-    fh.setFormatter(
-        logging.Formatter("[%(asctime)s][%(role)s][%(msg_type)s] %(message)s")
-    )
-
-    # Console handler - with colors
+    # Console handler with colored output
     ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
     ch.setFormatter(P2PFormatter())
-
-    logger.addHandler(fh)
     logger.addHandler(ch)
+
+    # File handler without colors
+    fh = logging.FileHandler("p2p.log")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(
+        logging.Formatter("[%(asctime)s][%(role)s][%(levelname)s] %(message)s")
+    )
+    logger.addHandler(fh)
+
     return logger
 
 
@@ -104,10 +118,10 @@ def send_file(sock, file_path):
             while chunk := f.read(1024):
                 sock.sendall(chunk)
                 sent += len(chunk)
-                print(
-                    f"\n[Sending: {sent}/{file_size} bytes ({int(sent/file_size*100)}%)]"
-                )
-        log(f"File sent: {file_name}", "ME", "FILE")
+                bytes_sent = f"{sent}/{file_size} bytes"
+                bytes_percent = int(sent / file_size * 100)
+                print(f"\r[Sending: {bytes_sent} ({bytes_percent}%)]", end="")
+        log(f"\nFile sent: {file_name} [{file_size} btyes]", "ME", "FILE")
     except Exception as e:
         log(f"Error sending file: {e}", "SYSTEM", "ERROR")
 
@@ -122,13 +136,12 @@ def receive_file(sock, file_name, file_size):
                     break
                 f.write(chunk)
                 received += len(chunk)
-                print(
-                    f"\rReceiving: {received}/{file_size} bytes ({int(received/file_size*100)}%)",
-                    end="",
-                )
-        print(f"\nFile received: {file_name}")
+                bytes_received = f"{received}/{file_size} bytes"
+                bytes_percent = int(received / file_size * 100)
+                print(f"\r[Receiving: {bytes_received} ({bytes_percent}%)]", end="")
+        log(f"\nFile received: {file_name} [{file_size} btyes]", "SYSTEM", "FILE")
     except Exception as e:
-        print(f"Error receiving file: {e}")
+        log(f"Error receiving file: {e}", "SYSTEM", "FILE")
 
 
 def send_messages(sock):
@@ -180,8 +193,8 @@ def receive_messages(sock):
 
 
 def main():
-    logger = setup_logger()
-    print(f"Process ID: {os.getpid()}")
+    setup_logger()
+    log(f"Process ID: {os.getpid()}", role="SYSTEM", msg_type="INFO")
     choice = (
         input("Type 's' to start as server or 'c' to connect as client: ")
         .strip()
@@ -194,10 +207,10 @@ def main():
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(("0.0.0.0", port))
         server.listen(1)
-        print(f"Server started on port {port}")
-        conn, addr = server.accept()
-        print(f"Connected to {addr}")
+        log(f"Server started on port {port}", role="SYSTEM", msg_type="INFO")
 
+        conn, addr = server.accept()
+        log(f"Connected to {addr}", role="SYSTEM", msg_type="INFO")
         send_thread = threading.Thread(target=send_messages, args=(conn,))
         receive_thread = threading.Thread(target=receive_messages, args=(conn,))
         send_thread.start()
@@ -207,8 +220,7 @@ def main():
     elif choice == "c":
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client.connect((host, port))
-        print(f"Connected to {host}:{port}")
-
+        log(f"Connected to {host}:{port}", role="SYSTEM", msg_type="INFO")
         send_thread = threading.Thread(target=send_messages, args=(client,))
         receive_thread = threading.Thread(target=receive_messages, args=(client,))
         send_thread.start()
