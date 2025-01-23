@@ -5,6 +5,7 @@ import sys
 from datetime import datetime
 import logging
 import argparse
+import time
 
 
 # ANSI colors for terminal
@@ -193,6 +194,17 @@ def receive_messages(sock):
             break
 
 
+def handle_client(conn, addr):
+    log(f"Connected to {addr}", role="SYSTEM", msg_type="INFO")
+    send_thread = threading.Thread(target=send_messages, args=(conn,))
+    receive_thread = threading.Thread(target=receive_messages, args=(conn,))
+    send_thread.start()
+    receive_thread.start()
+    send_thread.join()
+    receive_thread.join()
+    log(f"Connection closed: {addr}", role="SYSTEM", msg_type="INFO")
+
+
 def main():
     setup_logger()
     log(f"Process ID: {os.getpid()}", role="SYSTEM", msg_type="INFO")
@@ -207,26 +219,35 @@ def main():
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(("0.0.0.0", port))
-        server.listen(1)
+        server.listen(5)  # Allow up to 5 pending connections
         log(f"Server started on port {port}", role="SYSTEM", msg_type="INFO")
 
-        conn, addr = server.accept()
-        log(f"Connected to {addr}", role="SYSTEM", msg_type="INFO")
-        send_thread = threading.Thread(target=send_messages, args=(conn,))
-        receive_thread = threading.Thread(target=receive_messages, args=(conn,))
-        send_thread.start()
-        receive_thread.start()
-        send_thread.join()
+        while True:
+            conn, addr = server.accept()
+            client_thread = threading.Thread(target=handle_client, args=(conn, addr))
+            client_thread.start()
 
     elif args.client:
-        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.connect((host, port))
-        log(f"Connected to {host}:{port}", role="SYSTEM", msg_type="INFO")
-        send_thread = threading.Thread(target=send_messages, args=(client,))
-        receive_thread = threading.Thread(target=receive_messages, args=(client,))
-        send_thread.start()
-        receive_thread.start()
-        send_thread.join()
+        while True:
+            try:
+                client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client.connect((host, port))
+                log(f"Connected to {host}:{port}", role="SYSTEM", msg_type="INFO")
+                send_thread = threading.Thread(target=send_messages, args=(client,))
+                receive_thread = threading.Thread(
+                    target=receive_messages, args=(client,)
+                )
+                send_thread.start()
+                receive_thread.start()
+                send_thread.join()
+                receive_thread.join()
+            except Exception as e:
+                log(
+                    f"Connection error: {e}. Retrying...",
+                    role="SYSTEM",
+                    msg_type="ERROR",
+                )
+                time.sleep(5)  # Wait before retrying
 
 
 if __name__ == "__main__":
