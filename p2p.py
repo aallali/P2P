@@ -4,6 +4,7 @@ import os
 import sys
 from datetime import datetime
 import logging
+import argparse
 
 
 # ANSI colors for terminal
@@ -195,14 +196,14 @@ def receive_messages(sock):
 def main():
     setup_logger()
     log(f"Process ID: {os.getpid()}", role="SYSTEM", msg_type="INFO")
-    choice = (
-        input("Type 's' to start as server or 'c' to connect as client: ")
-        .strip()
-        .lower()
-    )
+    parser = argparse.ArgumentParser(description="P2P Chat Application")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("-s", "--server", action="store_true", help="Start as server")
+    group.add_argument("-c", "--client", action="store_true", help="Start as client")
+    args = parser.parse_args()
     host, port = read_config()
 
-    if choice == "s":
+    if args.server:
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(("0.0.0.0", port))
@@ -217,7 +218,7 @@ def main():
         receive_thread.start()
         send_thread.join()
 
-    elif choice == "c":
+    elif args.client:
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client.connect((host, port))
         log(f"Connected to {host}:{port}", role="SYSTEM", msg_type="INFO")
