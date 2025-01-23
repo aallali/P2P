@@ -1,38 +1,105 @@
 # p2p
 
-This is a lightweight Python-based peer-to-peer chat system for testing real-time communication.
+A lightweight Python-based peer-to-peer chat system, supports file sharing.
 
----
+## Usage
 
-### **Usage**
+### Start the Server
+1. Open a terminal, and run:
+   ```bash
+   python3 p2p.py -s
+   ```
 
-1. **Run the Script**:
-   - Open a terminal and start the server:
-     ```bash
-     python3 p2p.py
-     ```
-     - Type `s` to start as the server.
+### Connect as a Client
+1. Open another terminal or use another device, and run:
+   ```bash
+   python3 p2p.py -c
+   ```
 
-   - Open another terminal or run the script on another device:
-     ```bash
-     python3 p2p.py
-     ```
-     - Type `c` to connect as the client.
-     - Enter the **IP address** of the server (e.g., `127.0.0.1` for local testing).
+### Chat
+- Type messages and press **Enter** to send.
+- Messages from other users will appear in real-time.
 
-1. **Chat**:
-   - Type messages in the terminal and press **Enter** to send.
-   - Messages from the other user will appear in real-time.
+### Commands
+- `/file <path>`: Select a file to send.
+- `/send`: Resend the selected file.
+- `/close` or `/c`: Close the connection.
+- Any other text will be sent as a chat message.
 
----
+### Using ngrok
+1. Download and install ngrok from [ngrok.com](https://ngrok.com/).
+2. Start ngrok to tunnel TCP traffic on port `12345`:
+   ```bash
+   ngrok tcp 12345
+   ```
+3. Copy the forwarding address provided by ngrok (e.g., `tcp://0.tcp.ngrok.io:XXXXX`).
+4. Send this address to the client.
+    - His `.p2p.conf` file should look like:
+      ```conf
+      0.tcp.ngrok.io
+      XXXXX
+      ```
+5. The client should use this address to connect.
 
-### **Requirements**
+### Example Session
+
+#### Server
+```bash
+python3 p2p.py -s
+```
+```
+[2025-01-23 13:05:25][SYSTEM][INFO] Process ID: 25446
+[2025-01-23 13:05:25][SYSTEM][INFO] Server started on port 12345
+[2025-01-23 13:05:44][SYSTEM][INFO] Connected to ('127.0.0.1', 49796)
+[2025-01-23 13:05:44][ME][INFO] no client
+[2025-01-23 13:05:44][ME][INFO] cant send
+[2025-01-23 13:05:47][ME][INFO] hi
+[2025-01-23 13:05:52][HIM][INFO] salam
+[2025-01-23 13:06:01][HIM][INFO] i will send a file
+[2025-01-23 13:06:03][ME][INFO] ok
+[2025-01-23 13:06:09][HIM][INFO] Receiving: chat.txt (18 bytes)
+[2025-01-23 13:06:09][SYSTEM][INFO] Receiving: 18/18 bytes (100%)
+[2025-01-23 13:06:09][SYSTEM][INFO] File received: chat.txt [18 bytes]
+[2025-01-23 13:06:17][HIM][INFO] received ?
+[2025-01-23 13:06:22][ME][INFO] yes thanks, send again
+[2025-01-23 13:06:24][HIM][INFO] Receiving: chat.txt (18 bytes)
+[2025-01-23 13:06:24][SYSTEM][INFO] Receiving: 18/18 bytes (100%)
+[2025-01-23 13:06:24][SYSTEM][INFO] File received: chat.txt [18 bytes]
+```
+
+#### Client
+```bash
+python3 p2p.py -c
+```
+```
+[2025-01-23 13:05:43][SYSTEM][INFO] Process ID: 25568
+[2025-01-23 13:05:44][SYSTEM][INFO] Connected to x.tcp.xx.ngrok.io:XXXXX
+[2025-01-23 13:05:44][HIM][INFO] no client
+[2025-01-23 13:05:44][HIM][INFO] cant send
+[2025-01-23 13:05:47][HIM][INFO] hi
+[2025-01-23 13:05:52][ME][INFO] salam
+[2025-01-23 13:06:01][ME][INFO] i will send a file
+[2025-01-23 13:06:03][HIM][INFO] ok
+/file ../chat.txt
+[2025-01-23 13:06:09][ME][INFO] Selected: ../chat.txt
+[2025-01-23 13:06:09][SYSTEM][INFO] Sending: 18/18 bytes (100%)
+[2025-01-23 13:06:09][ME][INFO] File sent: chat.txt [18 bytes]
+[2025-01-23 13:06:17][ME][INFO] received ?
+[2025-01-23 13:06:22][HIM][INFO] yes thanks, send again
+/send
+[2025-01-23 13:06:24][ME][INFO] Resending: ../chat.txt
+[2025-01-23 13:06:24][SYSTEM][INFO] Sending: 18/18 bytes (100%)
+[2025-01-23 13:06:24][ME][INFO] File sent: chat.txt [18 bytes]
+```
+
+## Requirements
 - Python 3.x
-- Works locally or across a network.
 
----
-
-### **Notes**
-- Ensure the server is running before starting the client.
-- For testing on the same machine, use `127.0.0.1` as the server IP.
-- Allow port `12345` through firewalls for cross-device communication.
+## Notes
+- Use this `.p2p.conf` for local testing on your machine without needing an external device:
+```
+0.0.0.0
+12345
+```
+- Use file sharing to exchange large messages.
+- A `p2p.log` file is created to persist logs.
