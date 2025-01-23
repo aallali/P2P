@@ -13,123 +13,14 @@ import socket
 import threading
 import os
 import sys
-from datetime import datetime
-import logging
 import argparse
 import time
+from src.logger import setup_logger, log
+from src.config import read_config
 
 RECEIVED_FILES_DIR = "received_files"
 # Track the current file to send
 current_file = None
-
-CONFIG_FILE = ".p2p.conf"
-
-
-# ANSI colors for terminal
-class Colors:
-    ME = "\033[96m"  # Cyan for my messages
-    HIM = "\033[95m"  # Purple for their messages
-    INFO = "\033[94m"  # Blue for system info
-    SUCCESS = "\033[92m"  # Green for success
-    WARNING = "\033[93m"  # Yellow for warnings
-    ERROR = "\033[91m"  # Red for errors
-    RESET = "\033[0m"
-
-
-def setup_logger(persistent_logging):
-    class P2PFormatter(logging.Formatter):
-        def format(self, record):
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            # Determine role and assign color
-            if hasattr(record, "role"):
-                if record.role == "ME":
-                    color = Colors.ME
-                elif record.role == "HIM":
-                    color = Colors.HIM
-                elif record.role == "SYSTEM":
-                    color = Colors.WARNING
-                else:
-                    color = Colors.RESET
-            else:
-                color = Colors.RESET
-
-            # Determine message type color
-            if record.levelname == "ERROR":
-                msg_color = Colors.ERROR
-            elif record.levelname == "WARNING":
-                msg_color = Colors.WARNING
-            elif record.levelname == "SUCCESS":
-                msg_color = Colors.SUCCESS
-            else:
-                msg_color = color  # Default to role color
-
-            # Format the message with colors
-            formatted_message = f"{color}[{timestamp}][{record.role}][{record.levelname}] {msg_color}{record.getMessage()}{Colors.RESET}"
-            return formatted_message
-
-    logger = logging.getLogger("p2p")
-    logger.setLevel(logging.DEBUG)  # Set to DEBUG to capture all levels
-
-    # Console handler with colored output
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-    ch.setFormatter(P2PFormatter())
-    logger.addHandler(ch)
-
-    if persistent_logging:
-        # File handler without colors
-        fh = logging.FileHandler("p2p.log")
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(
-            logging.Formatter("[%(asctime)s][%(role)s][%(levelname)s] %(message)s")
-        )
-        logger.addHandler(fh)
-
-    return logger
-
-
-def log(msg, role="SYSTEM", msg_type="INFO"):
-    logger = logging.getLogger("p2p")
-    level = logging.ERROR if msg_type == "ERROR" else logging.INFO
-    logger.log(level, msg, extra={"role": role, "msg_type": msg_type})
-
-
-def create_default_config():
-    default_config = """server_host=0.tcp.ngrok.io
-server_port=XXXXX
-internal_port=12345
-received_files_dir=received_files
-log=True
-"""
-    with open(CONFIG_FILE, "w") as f:
-        f.write(default_config)
-    print(
-        f"Default config created at {CONFIG_FILE}. Please edit it and rerun the script."
-    )
-    sys.exit(0)
-
-
-def read_config():
-    if not os.path.exists(CONFIG_FILE):
-        create_default_config()
-
-    config = {}
-    with open(CONFIG_FILE) as f:
-        for line in f:
-            key, value = line.strip().split("=")
-            # handle comments inside value
-            if "#" in value:
-                value = value.split("#")[0].strip()
-            config[key] = value.strip()
-
-    return (
-        config["server_host"],
-        int(config["server_port"]),
-        int(config["internal_port"]),
-        config["received_files_dir"],
-        config["log"].lower() == "true",
-    )
 
 
 def close_socket(sock):
