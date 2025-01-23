@@ -128,10 +128,17 @@ def send_file(sock, file_path):
         log(f"Error sending file: {e}", "SYSTEM", "ERROR")
 
 
+RECEIVED_FILES_DIR = "received_files"
+
+def setup_received_files_dir():
+    if not os.path.exists(RECEIVED_FILES_DIR):
+        os.makedirs(RECEIVED_FILES_DIR)
+
 def receive_file(sock, file_name, file_size):
     try:
         received = 0
-        with open(file_name, "wb") as f:
+        file_path = os.path.join(RECEIVED_FILES_DIR, file_name)
+        with open(file_path, "wb") as f:
             while received < file_size:
                 chunk = sock.recv(min(1024, file_size - received))
                 if not chunk:
@@ -145,7 +152,7 @@ def receive_file(sock, file_name, file_size):
                     "SYSTEM",
                     "FILE",
                 )
-        log(f"File received: {file_name} [{file_size} btyes]", "SYSTEM", "FILE")
+        log(f"File received: {file_name} [{file_size} bytes]", "SYSTEM", "FILE")
     except Exception as e:
         log(f"Error receiving file: {e}", "SYSTEM", "FILE")
 
@@ -211,6 +218,7 @@ def handle_client(conn, addr):
 
 def main():
     setup_logger()
+    setup_received_files_dir()
     log(f"Process ID: {os.getpid()}", role="SYSTEM", msg_type="INFO")
     parser = argparse.ArgumentParser(description="P2P Chat Application")
     group = parser.add_mutually_exclusive_group(required=True)
