@@ -1,7 +1,6 @@
 import socket
 import threading
 import os
-import signal
 import sys
 
 # Track the current file to send
@@ -9,10 +8,20 @@ current_file = None
 
 
 def read_config():
-    with open("config.txt") as f:
-        host = f.readline().strip()
-        port = int(f.readline().strip())
-    return host, port
+    config_paths = [
+        ".p2p.conf",  # Hidden local config
+        os.path.expanduser("~/.p2p.conf"),  # Hidden user config
+    ]
+
+    for path in config_paths:
+        if os.path.exists(path):
+            with open(path) as f:
+                host = f.readline().strip()
+                port = int(f.readline().strip())
+            return host, port
+
+    # Default fallback
+    return "127.0.0.1", 12345
 
 
 def close_socket(sock):
