@@ -6,7 +6,7 @@
 #   License : MIT                                                            #
 #                                                                            #
 #   Created: 2025/01/22 17:17:48 by aallali                                  #
-#   Updated: 2025/01/23 13:32:35 by aallali                                  #
+#   Updated: 2025/01/23 17:14:00 by aallali                                  #
 # ************************************************************************** #
 
 import socket
@@ -22,6 +22,8 @@ RECEIVED_FILES_DIR = "received_files"
 # Track the current file to send
 current_file = None
 
+CONFIG_FILE = ".p2p.conf"
+
 
 # ANSI colors for terminal
 class Colors:
@@ -34,7 +36,7 @@ class Colors:
     RESET = "\033[0m"
 
 
-def setup_logger():
+def setup_logger(persistent_logging):
     class P2PFormatter(logging.Formatter):
         def format(self, record):
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -75,13 +77,14 @@ def setup_logger():
     ch.setFormatter(P2PFormatter())
     logger.addHandler(ch)
 
-    # File handler without colors
-    fh = logging.FileHandler("p2p.log")
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(
-        logging.Formatter("[%(asctime)s][%(role)s][%(levelname)s] %(message)s")
-    )
-    logger.addHandler(fh)
+    if persistent_logging:
+        # File handler without colors
+        fh = logging.FileHandler("p2p.log")
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(
+            logging.Formatter("[%(asctime)s][%(role)s][%(levelname)s] %(message)s")
+        )
+        logger.addHandler(fh)
 
     return logger
 
@@ -92,21 +95,41 @@ def log(msg, role="SYSTEM", msg_type="INFO"):
     logger.log(level, msg, extra={"role": role, "msg_type": msg_type})
 
 
+def create_default_config():
+    default_config = """server_host=0.tcp.ngrok.io
+server_port=XXXXX
+internal_port=12345
+received_files_dir=received_files
+log=True
+"""
+    with open(CONFIG_FILE, "w") as f:
+        f.write(default_config)
+    print(
+        f"Default config created at {CONFIG_FILE}. Please edit it and rerun the script."
+    )
+    sys.exit(0)
+
+
 def read_config():
-    config_paths = [
-        ".p2p.conf",  # Hidden local config
-        os.path.expanduser("~/.p2p.conf"),  # Hidden user config
-    ]
+    if not os.path.exists(CONFIG_FILE):
+        create_default_config()
 
-    for path in config_paths:
-        if os.path.exists(path):
-            with open(path) as f:
-                host = f.readline().strip()
-                port = int(f.readline().strip())
-            return host, port
+    config = {}
+    with open(CONFIG_FILE) as f:
+        for line in f:
+            key, value = line.strip().split("=")
+            # handle comments inside value
+            if "#" in value:
+                value = value.split("#")[0].strip()
+            config[key] = value.strip()
 
-    # Default fallback
-    return "127.0.0.1", 12345
+    return (
+        config["server_host"],
+        int(config["server_port"]),
+        int(config["internal_port"]),
+        config["received_files_dir"],
+        config["log"].lower() == "true",
+    )
 
 
 def close_socket(sock):
@@ -139,7 +162,9 @@ def send_file(sock, file_path):
         log(f"Error sending file: {e}", "SYSTEM", "ERROR")
 
 
-def setup_received_files_dir():
+def setup_received_files_dir(received_files_dir):
+    global RECEIVED_FILES_DIR
+    RECEIVED_FILES_DIR = received_files_dir
     if not os.path.exists(RECEIVED_FILES_DIR):
         os.makedirs(RECEIVED_FILES_DIR)
 
@@ -227,23 +252,24 @@ def handle_client(conn, addr):
 
 
 def main():
-    setup_logger()
-    setup_received_files_dir()
+    server_host, server_port, internal_port, received_files_dir, persistent_logging = (
+        read_config()
+    )
+    setup_logger(persistent_logging)
+    setup_received_files_dir(received_files_dir)
     log(f"Process ID: {os.getpid()}", role="SYSTEM", msg_type="INFO")
     parser = argparse.ArgumentParser(description="P2P Chat Application")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("-s", "--server", action="store_true", help="Start as server")
     group.add_argument("-c", "--client", action="store_true", help="Start as client")
     args = parser.parse_args()
-    host, port = read_config()
 
     if args.server:
-        port = 12345
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(("0.0.0.0", port))
+        server.bind(("0.0.0.0", internal_port))
         server.listen(5)  # Allow up to 5 pending connections
-        log(f"Server started on port {port}", role="SYSTEM", msg_type="INFO")
+        log(f"Server started on port {internal_port}", role="SYSTEM", msg_type="INFO")
 
         while True:
             conn, addr = server.accept()
@@ -254,8 +280,12 @@ def main():
         while True:
             try:
                 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                client.connect((host, port))
-                log(f"Connected to {host}:{port}", role="SYSTEM", msg_type="INFO")
+                client.connect((server_host, server_port))
+                log(
+                    f"Connected to {server_host}:{server_port}",
+                    role="SYSTEM",
+                    msg_type="INFO",
+                )
                 send_thread = threading.Thread(target=send_messages, args=(client,))
                 receive_thread = threading.Thread(
                     target=receive_messages, args=(client,)
