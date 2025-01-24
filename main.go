@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 const (
@@ -129,6 +131,18 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 	// Notify the other peer that we're connected
 	sendMessage(conn, Message{Action: "notification", Content: "Connected!"})
 
+	// Track files received from the peer to avoid recursive uploads
+	receivedFiles := make(map[string]bool)
+	var receivedFilesMutex sync.Mutex
+
+	// Start a file watcher for the /watch command
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		fmt.Println("Error creating watcher:", err)
+		return
+	}
+	defer watcher.Close()
+
 	// Handle incoming messages
 	go func() {
 		reader := bufio.NewReader(conn)
@@ -152,6 +166,19 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 					fmt.Println("Error saving file:", err)
 				} else {
 					fmt.Printf("File saved: %s\n", filePath)
+
+					// Mark the file as received to avoid recursive uploads
+					receivedFilesMutex.Lock()
+					receivedFiles[filePath] = true
+					receivedFilesMutex.Unlock()
+
+					// Clear the received flag after a short delay
+					go func() {
+						time.Sleep(2 * time.Second) // Adjust delay as needed
+						receivedFilesMutex.Lock()
+						delete(receivedFiles, filePath)
+						receivedFilesMutex.Unlock()
+					}()
 				}
 			case "notification":
 				// Print notifications
@@ -162,18 +189,55 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 
 	// Read commands from the user
 	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		command := scanner.Text()
-		if strings.HasPrefix(command, "/upload ") {
-			// Upload a file
-			filePath := strings.TrimPrefix(command, "/upload ")
-			if err := sendFile(conn, filePath, connMutex, currentConn); err != nil {
-				fmt.Println("Error uploading file:", err)
+	go func() {
+		for scanner.Scan() {
+			command := scanner.Text()
+			if strings.HasPrefix(command, "/upload ") {
+				// Upload a file
+				filePath := strings.TrimPrefix(command, "/upload ")
+				if err := sendFile(conn, filePath, connMutex, currentConn); err != nil {
+					fmt.Println("Error uploading file:", err)
+				} else {
+					fmt.Println("File uploaded successfully!")
+				}
+			} else if strings.HasPrefix(command, "/watch ") {
+				// Watch a file for changes
+				filePath := strings.TrimPrefix(command, "/watch ")
+				if err := watcher.Add(filePath); err != nil {
+					fmt.Println("Error watching file:", err)
+				} else {
+					fmt.Printf("Now watching: %s\n", filePath)
+				}
 			} else {
-				fmt.Println("File uploaded successfully!")
+				fmt.Println("Unknown command. Use '/upload <file>' or '/watch <file>'.")
 			}
-		} else {
-			fmt.Println("Unknown command. Use '/upload <file>' to send a file.")
+		}
+	}()
+
+	// Handle file watcher events
+	for {
+		select {
+		case event := <-watcher.Events:
+			if event.Op&fsnotify.Write == fsnotify.Write {
+				filePath := event.Name
+
+				// Check if the file was received from the peer
+				receivedFilesMutex.Lock()
+				if receivedFiles[filePath] {
+					receivedFilesMutex.Unlock()
+					continue // Ignore changes to received files
+				}
+				receivedFilesMutex.Unlock()
+
+				// Upload the file to the peer
+				if err := sendFile(conn, filePath, connMutex, currentConn); err != nil {
+					fmt.Println("Error uploading file:", err)
+				} else {
+					fmt.Printf("File uploaded automatically: %s\n", filePath)
+				}
+			}
+		case err := <-watcher.Errors:
+			fmt.Println("Watcher error:", err)
 		}
 	}
 }
