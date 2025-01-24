@@ -6,7 +6,7 @@
 //   License : MIT                                                            //
 //                                                                            //
 //   Created: 2025/01/24 17:27:43 by aallali                                  //
-//   Updated: 2025/01/25 00:03:49 by aallali                                  //
+//   Updated: 2025/01/25 00:36:58 by aallali                                  //
 // ************************************************************************** //
 
 package main
@@ -35,10 +35,11 @@ const (
 
 // Config structure
 type Config struct {
-	Mode   string `json:"mode"` // "host" or "peer"
-	IP     string `json:"ip"`
-	Port   int    `json:"port"`
-	Folder string `json:"folder"`
+	Mode     string `json:"mode"` // "host" or "peer"
+	IP       string `json:"ip"`
+	Port     int    `json:"port"`
+	Folder   string `json:"folder"`
+	Password string `json:"password"` // Added password field
 }
 
 // Message structure
@@ -47,6 +48,12 @@ type Message struct {
 	Path      string `json:"path"`      // File path
 	Content   string `json:"content"`   // File content (base64 encoded)
 	TotalSize int64  `json:"totalSize"` // Total file size
+}
+
+// Add new message type for authentication
+type AuthMessage struct {
+	Password string `json:"password"`
+	Status   string `json:"status"` // "ok" or "failed"
 }
 
 // FileEntry represents a file in memory
@@ -65,10 +72,11 @@ type FileManager struct {
 func loadConfig() Config {
 	if _, err := os.Stat(ConfigFile); os.IsNotExist(err) {
 		defaultConfig := Config{
-			Mode:   "host",
-			IP:     "0.0.0.0",
-			Port:   12345,
-			Folder: "./shared",
+			Mode:     "host",
+			IP:       "0.0.0.0",
+			Port:     12345,
+			Folder:   "./shared",
+			Password: "1337", // Default password
 		}
 		configData, _ := json.MarshalIndent(defaultConfig, "", "  ")
 		os.WriteFile(ConfigFile, configData, 0644)
@@ -87,6 +95,28 @@ func loadConfig() Config {
 	}
 
 	return config
+}
+
+func authenticateConnection(conn net.Conn, expectedPassword string) bool {
+	// Set a timeout for authentication
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	defer conn.SetDeadline(time.Time{})
+
+	var authMessage AuthMessage
+	decoder := json.NewDecoder(conn)
+	if err := decoder.Decode(&authMessage); err != nil {
+		return false
+	}
+
+	// Send authentication response
+	response := AuthMessage{Status: "failed"}
+	if authMessage.Password == expectedPassword {
+		response.Status = "ok"
+	}
+	encoder := json.NewEncoder(conn)
+	encoder.Encode(response)
+
+	return authMessage.Password == expectedPassword
 }
 
 func startHost(config Config) {
@@ -109,6 +139,13 @@ func startHost(config Config) {
 			continue
 		}
 
+		// Authenticate the connection
+		if !authenticateConnection(conn, config.Password) {
+			logMessage("Authentication failed. Connection rejected.\n")
+			conn.Close()
+			continue
+		}
+
 		// Close the previous connection if it exists
 		connMutex.Lock()
 		if currentConn != nil {
@@ -117,7 +154,7 @@ func startHost(config Config) {
 		currentConn = conn
 		connMutex.Unlock()
 
-		logMessage("Peer connected.\n")
+		logMessage("Peer connected and authenticated.\n")
 
 		// Handle the connection in a new goroutine
 		go handleConnection(config, conn, &connMutex, &currentConn)
@@ -132,10 +169,35 @@ func connectToHost(config Config) {
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		defer conn.Close()
-		logMessage("Connected to host.\n")
 
-		// Handle the connection
+		// Send authentication message
+		authMessage := AuthMessage{Password: config.Password}
+		encoder := json.NewEncoder(conn)
+		if err := encoder.Encode(authMessage); err != nil {
+			logMessage("Failed to send authentication: %v\n", err)
+			conn.Close()
+			continue
+		}
+
+		// Wait for authentication response
+		var response AuthMessage
+		decoder := json.NewDecoder(conn)
+		if err := decoder.Decode(&response); err != nil {
+			logMessage("Failed to receive authentication response: %v\n", err)
+			conn.Close()
+			continue
+		}
+
+		if response.Status != "ok" {
+			logMessage("Authentication failed: Invalid password\n")
+			// quit program if invalid password
+
+			conn.Close()
+			connState.setConnected(false)
+			os.Exit(1)
+		}
+
+		logMessage("Connected and authenticated to host.\n")
 		handleConnection(config, conn, nil, nil)
 	}
 }
