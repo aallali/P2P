@@ -6,7 +6,7 @@
 //   License : MIT                                                            //
 //                                                                            //
 //   Created: 2025/01/24 17:27:43 by aallali                                  //
-//   Updated: 2025/01/24 21:52:38 by aallali                                  //
+//   Updated: 2025/01/25 00:03:49 by aallali                                  //
 // ************************************************************************** //
 
 package main
@@ -181,6 +181,10 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 			if err != nil {
 				if err == io.EOF {
 					logMessage("Peer disconnected.\n")
+					// Reconnect if this is the peer in case of disconnection from server
+					if config.Mode == "peer" {
+						connectToHost(config)
+					}
 				} else {
 					logMessage("Error reading message: %v\n", err)
 				}
