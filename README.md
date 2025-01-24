@@ -1,15 +1,8 @@
 # P2P-FileBridge
 A simple peer-to-peer file synchronization tool written in Go that allows real-time file synchronization between two nodes.
 
-## Features
-- Real-time file synchronization
-- Supports both host and peer modes
-- Automatic reconnection for peers
-- File change detection
-- Simple JSON configuration
-
-## Quick Start1. 
-Build the application:   
+## Quick Start
+1. Build the application:   
 ```bash
 go build   
 ```
@@ -41,28 +34,47 @@ go build
 ./p2p   
 ```
 ## How It Works
-1. Upload a file (auto-adds it to the list):
-   ```bash
-   /up /path/to/file.txt
-   ```
-2. Watch a file (auto-adds it to the list):
-   ```bash
-   /w /path/to/file.txt
-   ```
-3. List files:
+1. Add file to tracking:
+    ```
+    /add /path/to/file.txt
+    ```
+1. List files:
    ```bash
    /ls
    ```
    Output:
    ```
-   Index | Watched | Size | Path
-      0 |     YES | 1024 | /path/to/file.txt
+    Index | Watched | Size     | Path
+    0     |    YES  | 1.2 MB   | /path/to/file1.txt
+    1     |     NO  | 852 KB   | /path/to/file2.txt
    ```
+1. Upload a file (auto-adds it to the list):
+   ```bash
+   /up /path/to/file.txt
+   /up #0                   #upload by index
+   ```
+1. Watch a file (auto-adds it to the list):
+   ```bash
+   /w /path/to/file.txt
+   ```
+
 
 4. Stop watching a file:
    ```bash
-   /woff #0
+    /w /path/to/file.txt    # Start watching
+    /w #0                   # Watch by index
+    /woff /path/to/file.txt # Stop watching
+    /woff #0               # Stop by index
    ```
+5. Cleanup console:
+    ```
+    /cl
+    ```
+## Notes
+- Files can be referenced by path or index (#)
+- Watched files auto-upload on changes
+- Files are automatically added to in-memory db when uploaded for quick alias
+- Use Ctrl+C to exit program
 
 ---
 
