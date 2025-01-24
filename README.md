@@ -24,6 +24,8 @@ A lightweight Python-based peer-to-peer chat system, supports file sharing.
 - `/file <path>`: Select a file to send.
 - `/send`: Resend the selected file.
 - `/close` or `/c`: Close the connection.
+- `/clear`: Clear the screen.
+- `/info`: Show information about the currently selected file.
 - Any other text will be sent as a chat message.
 
 ### Using ngrok

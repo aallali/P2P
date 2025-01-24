@@ -6,29 +6,19 @@
 #   License : MIT                                                            #
 #                                                                            #
 #   Created: 2025/01/22 17:17:48 by aallali                                  #
-#   Updated: 2025/01/23 17:14:00 by aallali                                  #
+#   Updated: 2025/01/24 01:33:21 by aallali                                  #
 # ************************************************************************** #
 
 import socket
 import threading
 import os
-import sys
 import argparse
 import time
+from src.commands import CommandHandler
 from src.logger import setup_logger, log
 from src.config import read_config, FILE_HEADER, END_OF_FILE
 import src.config as shared_config
-from src.files import send_file, receive_file
-
-def close_socket(sock):
-    try:
-        sock.settimeout(2)
-        sock.shutdown(socket.SHUT_RDWR)
-        sock.close()
-    except socket.error:
-        pass
-    finally:
-        sys.exit(0)
+from src.files import receive_file
 
 
 def setup_received_files_dir(received_files_dir):
@@ -38,29 +28,11 @@ def setup_received_files_dir(received_files_dir):
 
 
 def send_messages(sock):
+    handler = CommandHandler(sock, shared_config.RECEIVED_FILES_DIR)
     while True:
         try:
             message = input("")
-            if message.startswith("/file "):
-                file_path = message.split(" ", 1)[1].strip()
-                if os.path.exists(file_path):
-                    shared_config.current_file = file_path
-                    log(f"Selected: {file_path}", "ME", "FILE")
-                    send_file(sock, shared_config.current_file)
-                else:
-                    log(f"File not found: {file_path}", "SYSTEM", "ERROR")
-            elif message == "/send":
-                if shared_config.current_file and os.path.exists(shared_config.current_file):
-                    log(f"Resending: {shared_config.current_file}", "ME", "FILE")
-                    send_file(sock, shared_config.current_file)
-                else:
-                    log("No file selected or file not found", "SYSTEM", "ERROR")
-            elif message in ["/close", "/c"]:
-                log("Closing connection", "SYSTEM", "INFO")
-                close_socket(sock)
-            else:
-                log(message, "ME", "CHAT")
-                sock.sendall(message.encode())
+            handler.execute(message)
         except Exception as e:
             log(str(e), "SYSTEM", "ERROR")
             break
@@ -73,17 +45,16 @@ def receive_messages(sock):
             if not raw_message:
                 log("Connection closed by peer", "SYSTEM", "WARNING")
                 break
-            
+
             try:
                 message = raw_message.decode()
-                print(FILE_HEADER, message[:len(FILE_HEADER)])
                 if message.startswith(FILE_HEADER):
                     _, file_name, file_size = message.split(" ", 2)
                     receive_file(sock, file_name, int(file_size))
                 elif message == END_OF_FILE:
                     log("File transfer complete", "SYSTEM", "FILE")
                 else:
-                    log(len(message), "HIM", "CHAT")
+                    log(message, "HIM", "CHAT")
             except UnicodeDecodeError:
                 log("Received corrupt message", "SYSTEM", "ERROR")
                 continue

@@ -1,3 +1,14 @@
+# ************************************************************************** #
+#   Copyright © hi@allali.me                                                 #
+#                                                                            #
+#   File    : logger.py                                                      #
+#   Project : p2p                                                            #
+#   License : MIT                                                            #
+#                                                                            #
+#   Created: 2025/01/23 19:56:40 by aallali                                  #
+#   Updated: 2025/01/24 01:34:04 by aallali                                  #
+# ************************************************************************** #
+
 import logging
 from datetime import datetime
 
