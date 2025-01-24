@@ -1,12 +1,25 @@
+// ************************************************************************** //
+//   Copyright © hi@allali.me                                                 //
+//                                                                            //
+//   File    : main.go                                                        //
+//   Project : p2p                                                            //
+//   License : MIT                                                            //
+//                                                                            //
+//   Created: 2025/01/24 17:27:43 by aallali                                  //
+//   Updated: 2025/01/24 21:52:38 by aallali                                  //
+// ************************************************************************** //
+
 package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -30,9 +43,10 @@ type Config struct {
 
 // Message structure
 type Message struct {
-	Action  string `json:"action"`  // "upload", "notification"
-	Path    string `json:"path"`    // File path
-	Content string `json:"content"` // File content (base64 encoded)
+	Action    string `json:"action"`    // "upload", "notification"
+	Path      string `json:"path"`      // File path
+	Content   string `json:"content"`   // File content (base64 encoded)
+	TotalSize int64  `json:"totalSize"` // Total file size
 }
 
 // FileEntry represents a file in memory
@@ -81,7 +95,7 @@ func startHost(config Config) {
 		panic(err)
 	}
 	defer listener.Close()
-	fmt.Printf("Hosting on %s:%d. Waiting for connection...\n", config.IP, config.Port)
+	logMessage("Hosting on %s:%d. Waiting for connection...\n", config.IP, config.Port)
 
 	var (
 		currentConn net.Conn
@@ -91,7 +105,7 @@ func startHost(config Config) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Println("Error accepting connection:", err)
+			logMessage("Error accepting connection: %v\n", err)
 			continue
 		}
 
@@ -103,7 +117,7 @@ func startHost(config Config) {
 		currentConn = conn
 		connMutex.Unlock()
 
-		fmt.Println("Peer connected.")
+		logMessage("Peer connected.\n")
 
 		// Handle the connection in a new goroutine
 		go handleConnection(config, conn, &connMutex, &currentConn)
@@ -114,12 +128,12 @@ func connectToHost(config Config) {
 	for {
 		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", config.IP, config.Port))
 		if err != nil {
-			fmt.Println("Host not available. Retrying in 5 seconds...")
+			logMessage("Host not available. Retrying in 5 seconds...\n")
 			time.Sleep(5 * time.Second)
 			continue
 		}
 		defer conn.Close()
-		fmt.Println("Connected to host.")
+		logMessage("Connected to host.\n")
 
 		// Handle the connection
 		handleConnection(config, conn, nil, nil)
@@ -128,7 +142,7 @@ func connectToHost(config Config) {
 
 func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, currentConn *net.Conn) {
 	defer func() {
-		fmt.Println("Peer disconnected.")
+		logMessage("Peer disconnected.\n")
 		conn.Close()
 
 		// Clear the current connection if this is the host
@@ -154,7 +168,7 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 	// Start a file watcher for the /w command
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		fmt.Println("Error creating watcher:", err)
+		logMessage("Error creating watcher: %v\n", err)
 		return
 	}
 	defer watcher.Close()
@@ -166,9 +180,9 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 			message, err := readMessage(reader)
 			if err != nil {
 				if err == io.EOF {
-					fmt.Println("Peer disconnected.")
+					logMessage("Peer disconnected.\n")
 				} else {
-					fmt.Println("Error reading message:", err)
+					logMessage("Error reading message: %v\n", err)
 				}
 				return
 			}
@@ -178,10 +192,19 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 				// Save the uploaded file
 				filePath := filepath.Join(config.Folder, message.Path)
 				os.MkdirAll(filepath.Dir(filePath), 0755)
-				if err := os.WriteFile(filePath, []byte(message.Content), 0644); err != nil {
-					fmt.Println("Error saving file:", err)
+
+				// Decode the content
+				content, err := base64.StdEncoding.DecodeString(message.Content)
+				if err != nil {
+					logMessage("Error decoding file content: %v\n", err)
+					continue
+				}
+
+				// Write the file
+				if err := os.WriteFile(filePath, content, 0644); err != nil {
+					logMessage("Error saving file: %v\n", err)
 				} else {
-					fmt.Printf("File saved: %s\n", filePath)
+					logMessage("\rFile saved: %s (or downloading...)", filePath)
 
 					// Mark the file as received to avoid recursive uploads
 					receivedFilesMutex.Lock()
@@ -196,9 +219,10 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 						receivedFilesMutex.Unlock()
 					}()
 				}
+
 			case "notification":
 				// Print notifications
-				fmt.Println("Notification from peer:", message.Content)
+				logMessage("Notification from peer: %s\n", message.Content)
 			}
 		}
 	}()
@@ -216,7 +240,7 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 			switch parts[0] {
 			case "/up":
 				if len(parts) < 2 {
-					fmt.Println("Usage: /up <file> or /up #<number>")
+					logMessage("Usage: /up <file> or /up #<number>\n")
 					continue
 				}
 				filePath := parts[1]
@@ -224,12 +248,12 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 					// Upload by index
 					index := parseIndex(filePath)
 					if index == -1 {
-						fmt.Println("Invalid index.")
+						logMessage("Invalid index.\n")
 						continue
 					}
 					fileManager.Mutex.Lock()
 					if index >= len(fileManager.Files) {
-						fmt.Println("Index out of range.")
+						logMessage("Index out of range.\n")
 						fileManager.Mutex.Unlock()
 						continue
 					}
@@ -241,7 +265,7 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 					if !fileManager.contains(filePath) {
 						fileInfo, err := os.Stat(filePath)
 						if err != nil {
-							fmt.Println("Error accessing file:", err)
+							logMessage("Error accessing file: %v\n", err)
 							fileManager.Mutex.Unlock()
 							continue
 						}
@@ -250,19 +274,19 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 							Size:    fileInfo.Size(),
 							Watched: false,
 						})
-						fmt.Printf("Added file: %s\n", filePath)
+						logMessage("Added file: %s\n", filePath)
 					}
 					fileManager.Mutex.Unlock()
 				}
-				if err := sendFile(conn, filePath, connMutex, currentConn); err != nil {
-					fmt.Println("Error uploading file:", err)
+				if err := sendFileWithProgress(conn, filePath, connMutex, currentConn); err != nil {
+					logMessage("Error uploading file: %v\n", err)
 				} else {
-					fmt.Println("File uploaded successfully!")
+					logMessage("File uploaded successfully!\n")
 				}
 
 			case "/w":
 				if len(parts) < 2 {
-					fmt.Println("Usage: /w <file> or /w #<number>")
+					logMessage("Usage: /w <file> or /w #<number>\n")
 					continue
 				}
 				filePath := parts[1]
@@ -270,12 +294,12 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 					// Watch by index
 					index := parseIndex(filePath)
 					if index == -1 {
-						fmt.Println("Invalid index.")
+						logMessage("Invalid index.\n")
 						continue
 					}
 					fileManager.Mutex.Lock()
 					if index >= len(fileManager.Files) {
-						fmt.Println("Index out of range.")
+						logMessage("Index out of range.\n")
 						fileManager.Mutex.Unlock()
 						continue
 					}
@@ -287,7 +311,7 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 					if !fileManager.contains(filePath) {
 						fileInfo, err := os.Stat(filePath)
 						if err != nil {
-							fmt.Println("Error accessing file:", err)
+							logMessage("Error accessing file: %v\n", err)
 							fileManager.Mutex.Unlock()
 							continue
 						}
@@ -296,14 +320,14 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 							Size:    fileInfo.Size(),
 							Watched: false,
 						})
-						fmt.Printf("Added file: %s\n", filePath)
+						logMessage("Added file: %s\n", filePath)
 					}
 					fileManager.Mutex.Unlock()
 				}
 				if err := watcher.Add(filePath); err != nil {
-					fmt.Println("Error watching file:", err)
+					logMessage("Error watching file: %v\n", err)
 				} else {
-					fmt.Printf("Now watching: %s\n", filePath)
+					logMessage("Now watching: %s\n", filePath)
 					fileManager.Mutex.Lock()
 					for i := range fileManager.Files {
 						if fileManager.Files[i].Path == filePath {
@@ -316,7 +340,7 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 
 			case "/woff":
 				if len(parts) < 2 {
-					fmt.Println("Usage: /woff <file> or /woff #<number>")
+					logMessage("Usage: /woff <file> or /woff #<number>\n")
 					continue
 				}
 				filePath := parts[1]
@@ -324,12 +348,12 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 					// Unwatch by index
 					index := parseIndex(filePath)
 					if index == -1 {
-						fmt.Println("Invalid index.")
+						logMessage("Invalid index.\n")
 						continue
 					}
 					fileManager.Mutex.Lock()
 					if index >= len(fileManager.Files) {
-						fmt.Println("Index out of range.")
+						logMessage("Index out of range.\n")
 						fileManager.Mutex.Unlock()
 						continue
 					}
@@ -337,9 +361,9 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 					fileManager.Mutex.Unlock()
 				}
 				if err := watcher.Remove(filePath); err != nil {
-					fmt.Println("Error unwatching file:", err)
+					logMessage("Error unwatching file: %v\n", err)
 				} else {
-					fmt.Printf("Stopped watching: %s\n", filePath)
+					logMessage("Stopped watching: %s\n", filePath)
 					fileManager.Mutex.Lock()
 					for i := range fileManager.Files {
 						if fileManager.Files[i].Path == filePath {
@@ -352,13 +376,13 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 
 			case "/add":
 				if len(parts) < 2 {
-					fmt.Println("Usage: /add <file>")
+					logMessage("Usage: /add <file>\n")
 					continue
 				}
 				filePath := parts[1]
 				fileInfo, err := os.Stat(filePath)
 				if err != nil {
-					fmt.Println("Error accessing file:", err)
+					logMessage("Error accessing file: %v\n", err)
 					continue
 				}
 				fileManager.Mutex.Lock()
@@ -368,27 +392,43 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 					Watched: false,
 				})
 				fileManager.Mutex.Unlock()
-				fmt.Printf("Added file: %s\n", filePath)
+				logMessage("Added file: %s\n", filePath)
 
 			case "/ls":
 				fileManager.Mutex.Lock()
-				fmt.Println("Index | Watched | Size | Path")
+				logMessage("Index | Watched | Size | Path\n")
 				for i, file := range fileManager.Files {
 					watchedStatus := "NO"
 					if file.Watched {
 						watchedStatus = "YES"
 					}
-					fmt.Printf("%5d | %7s | %4d | %s\n", i, watchedStatus, file.Size, file.Path)
+					logMessage("%5d | %7s | %4d | %s\n", i, watchedStatus, file.Size, file.Path)
 				}
 				fileManager.Mutex.Unlock()
 
+			case "/cl":
+				clearConsole()
+
 			default:
-				fmt.Println("Unknown command. Use /up, /w, /woff, /add, or /ls.")
+				logMessage(`
+Unknown command. 
+Available commands:
+	- /add                       Add a file to the alias list
+	- /ls                        List files ready to be uploaded
+	- /cl                        Clear the console
+	- /up <file> or #<number>    Upload a file
+	- /w <file> or #<number>     Watch a file
+	- /woff <file> or #<number>  Cancel watch for a file
+`)
 			}
 		}
 	}()
 
-	// Handle file watcher events
+	// Handle file watcher events with debounce
+	var (
+		lastEventTime time.Time
+		debounceDelay = 500 * time.Millisecond
+	)
 	for {
 		select {
 		case event := <-watcher.Events:
@@ -403,45 +443,76 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 				}
 				receivedFilesMutex.Unlock()
 
+				// Debounce the event
+				if time.Since(lastEventTime) < debounceDelay {
+					continue
+				}
+				lastEventTime = time.Now()
+
 				// Upload the file to the peer
-				if err := sendFile(conn, filePath, connMutex, currentConn); err != nil {
-					fmt.Println("Error uploading file:", err)
+				if err := sendFileWithProgress(conn, filePath, connMutex, currentConn); err != nil {
+					logMessage("Error uploading file: %v\n", err)
 				} else {
-					fmt.Printf("File uploaded automatically: %s\n", filePath)
+					logMessage("File uploaded automatically: %s\n", filePath)
 				}
 			}
 		case err := <-watcher.Errors:
-			fmt.Println("Watcher error:", err)
+			logMessage("Watcher error: %v\n", err)
 		}
 	}
 }
 
-func sendFile(conn net.Conn, filePath string, connMutex *sync.Mutex, currentConn *net.Conn) error {
-	// Read the file
-	content, err := os.ReadFile(filePath)
+func sendFileWithProgress(conn net.Conn, filePath string, connMutex *sync.Mutex, currentConn *net.Conn) error {
+	// Open the file
+	file, err := os.Open(filePath)
 	if err != nil {
 		return err
 	}
+	defer file.Close()
 
-	// Send the file as a message
-	message := Message{
-		Action:  "upload",
-		Path:    filepath.Base(filePath),
-		Content: string(content),
+	// Get file size
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return err
 	}
+	fileSize := fileInfo.Size()
 
-	// If this is the host, use the current connection
-	if connMutex != nil && currentConn != nil {
-		connMutex.Lock()
-		if *currentConn == nil {
-			connMutex.Unlock()
-			return fmt.Errorf("no active connection")
+	// Initialize progress tracking
+	var sentBytes int64
+	startTime := time.Now()
+
+	// Send the file in chunks
+	buffer := make([]byte, ChunkSize)
+	for {
+		n, err := file.Read(buffer)
+		if err != nil && err != io.EOF {
+			return err
 		}
-		conn = *currentConn
-		connMutex.Unlock()
+		if n == 0 {
+			break
+		}
+
+		// Send the chunk
+		message := Message{
+			Action:    "upload",
+			Path:      filepath.Base(filePath),
+			Content:   base64.StdEncoding.EncodeToString(buffer[:n]),
+			TotalSize: fileSize,
+		}
+		if err := sendMessage(conn, message); err != nil {
+			return err
+		}
+
+		// Update progress
+		sentBytes += int64(n)
+		progress := float64(sentBytes) / float64(fileSize) * 100
+		elapsed := time.Since(startTime).Seconds()
+		speed := float64(sentBytes) / elapsed / 1024 // Speed in KB/s
+		logMessage("\rUploading: %.2f%% (%.2f KB/s)", progress, speed)
 	}
 
-	return sendMessage(conn, message)
+	logMessage("\nUpload complete!\n")
+	return nil
 }
 
 func sendMessage(conn net.Conn, message Message) error {
@@ -484,6 +555,19 @@ func (fm *FileManager) contains(filePath string) bool {
 		}
 	}
 	return false
+}
+
+// Clear the console
+func clearConsole() {
+	cmd := exec.Command("clear") // Use "cls" for Windows
+	cmd.Stdout = os.Stdout
+	cmd.Run()
+}
+
+// Log messages with timestamps
+func logMessage(format string, a ...interface{}) {
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	fmt.Printf("[%s] "+format, append([]interface{}{timestamp}, a...)...)
 }
 
 func main() {
