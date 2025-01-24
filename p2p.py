@@ -16,15 +16,9 @@ import sys
 import argparse
 import time
 from src.logger import setup_logger, log
-from src.config import read_config
-
-RECEIVED_FILES_DIR = "received_files"
-# Track the current file to send
-current_file = None
-
-FILE_HEADER = "FILE_TRANSFER"
-END_OF_FILE = "EOF"
-
+from src.config import read_config, FILE_HEADER, END_OF_FILE
+import src.config as shared_config
+from src.files import send_file, receive_file
 
 def close_socket(sock):
     try:
@@ -37,75 +31,28 @@ def close_socket(sock):
         sys.exit(0)
 
 
-def send_file(sock, file_path):
-    try:
-        file_name = os.path.basename(file_path)
-        file_size = os.path.getsize(file_path)
-        sock.sendall(f"{FILE_HEADER} {file_name} {file_size}".encode())
-
-        sent = 0
-        with open(file_path, "rb") as f:
-            while chunk := f.read(1024):
-                sock.sendall(chunk)
-                sent += len(chunk)
-                bytes_sent = f"{sent}/{file_size} bytes"
-                bytes_percent = int(sent / file_size * 100)
-                if sent % (file_size // 10) == 0:
-                    log(f"Sending: {bytes_sent} ({bytes_percent}%)", "SYSTEM", "FILE")
-        sock.sendall(END_OF_FILE.encode())
-        log(f"File sent: {file_name} [{file_size} bytes]", "ME", "FILE")
-    except Exception as e:
-        log(f"Error sending file: {e}", "SYSTEM", "ERROR")
-
-
 def setup_received_files_dir(received_files_dir):
-    global RECEIVED_FILES_DIR
-    RECEIVED_FILES_DIR = received_files_dir
-    if not os.path.exists(RECEIVED_FILES_DIR):
-        os.makedirs(RECEIVED_FILES_DIR)
-
-
-def receive_file(sock, file_name, file_size):
-    try:
-        received = 0
-        file_path = os.path.join(RECEIVED_FILES_DIR, file_name)
-        with open(file_path, "wb") as f:
-            while received < file_size:
-                chunk = sock.recv(min(1024, file_size - received))
-                if not chunk:
-                    break
-                f.write(chunk)
-                received += len(chunk)
-                bytes_received = f"{received}/{file_size} bytes"
-                bytes_percent = int(received / file_size * 100)
-                if received % (file_size // 10) == 0:
-                    log(
-                        f"Receiving: {bytes_received} ({bytes_percent}%)",
-                        "SYSTEM",
-                        "FILE",
-                    )
-        log(f"File received: {file_name} [{file_size} bytes]", "SYSTEM", "FILE")
-    except Exception as e:
-        log(f"Error receiving file: {e}", "SYSTEM", "FILE")
+    shared_config.RECEIVED_FILES_DIR = received_files_dir
+    if not os.path.exists(shared_config.RECEIVED_FILES_DIR):
+        os.makedirs(shared_config.RECEIVED_FILES_DIR)
 
 
 def send_messages(sock):
-    global current_file
     while True:
         try:
             message = input("")
             if message.startswith("/file "):
                 file_path = message.split(" ", 1)[1].strip()
                 if os.path.exists(file_path):
-                    current_file = file_path
+                    shared_config.current_file = file_path
                     log(f"Selected: {file_path}", "ME", "FILE")
-                    send_file(sock, current_file)
+                    send_file(sock, shared_config.current_file)
                 else:
                     log(f"File not found: {file_path}", "SYSTEM", "ERROR")
             elif message == "/send":
-                if current_file and os.path.exists(current_file):
-                    log(f"Resending: {current_file}", "ME", "FILE")
-                    send_file(sock, current_file)
+                if shared_config.current_file and os.path.exists(shared_config.current_file):
+                    log(f"Resending: {shared_config.current_file}", "ME", "FILE")
+                    send_file(sock, shared_config.current_file)
                 else:
                     log("No file selected or file not found", "SYSTEM", "ERROR")
             elif message in ["/close", "/c"]:
@@ -126,16 +73,17 @@ def receive_messages(sock):
             if not raw_message:
                 log("Connection closed by peer", "SYSTEM", "WARNING")
                 break
-
+            
             try:
                 message = raw_message.decode()
+                print(FILE_HEADER, message[:len(FILE_HEADER)])
                 if message.startswith(FILE_HEADER):
                     _, file_name, file_size = message.split(" ", 2)
                     receive_file(sock, file_name, int(file_size))
                 elif message == END_OF_FILE:
                     log("File transfer complete", "SYSTEM", "FILE")
                 else:
-                    log(message, "HIM", "CHAT")
+                    log(len(message), "HIM", "CHAT")
             except UnicodeDecodeError:
                 log("Received corrupt message", "SYSTEM", "ERROR")
                 continue
@@ -157,9 +105,7 @@ def handle_client(conn, addr):
 
 
 def main():
-    server_host, server_port, internal_port, received_files_dir, persistent_logging = (
-        read_config()
-    )
+    server_host, server_port, internal_port, received_files_dir, persistent_logging = read_config()
     setup_logger(persistent_logging)
     setup_received_files_dir(received_files_dir)
     log(f"Process ID: {os.getpid()}", role="SYSTEM", msg_type="INFO")
@@ -192,9 +138,7 @@ def main():
                     msg_type="INFO",
                 )
                 send_thread = threading.Thread(target=send_messages, args=(client,))
-                receive_thread = threading.Thread(
-                    target=receive_messages, args=(client,)
-                )
+                receive_thread = threading.Thread(target=receive_messages, args=(client,))
                 send_thread.start()
                 receive_thread.start()
                 send_thread.join()

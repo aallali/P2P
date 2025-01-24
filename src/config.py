@@ -1,7 +1,22 @@
+# ************************************************************************** #
+#   Copyright © hi@allali.me                                                 #
+#                                                                            #
+#   File    : config.py                                                      #
+#   Project : p2p                                                            #
+#   License : MIT                                                            #
+#                                                                            #
+#   Created: 2025/01/23 19:59:49 by aallali                                  #
+#   Updated: 2025/01/24 01:33:54 by aallali                                  #
+# ************************************************************************** #
+
 import os
 import sys
 
 CONFIG_FILE = ".p2p.conf"
+RECEIVED_FILES_DIR = "received_files"
+FILE_HEADER = "FILE_TRANSFER"
+END_OF_FILE = "EOF"
+current_file = None
 
 
 def create_default_config():
