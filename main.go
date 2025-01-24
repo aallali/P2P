@@ -35,11 +35,12 @@ const (
 
 // Config structure
 type Config struct {
-	Mode     string `json:"mode"` // "host" or "peer"
-	IP       string `json:"ip"`
-	Port     int    `json:"port"`
-	Folder   string `json:"folder"`
-	Password string `json:"password"` // Added password field
+	Mode        string `json:"mode"` // "host" or "peer"
+	IP          string `json:"ip"`
+	Port        int    `json:"port"`
+	Folder      string `json:"folder"`
+	Password    string `json:"password"`
+	WhitelistIP string `json:"peer_ip"` // Added whitelist IP field
 }
 
 // Message structure
@@ -69,14 +70,81 @@ type FileManager struct {
 	Mutex sync.Mutex
 }
 
+// Add new type for connection state management
+type ConnectionState struct {
+	isConnected bool
+	mutex       sync.Mutex
+}
+
+func (cs *ConnectionState) setConnected(connected bool) {
+	cs.mutex.Lock()
+	cs.isConnected = connected
+	cs.mutex.Unlock()
+}
+
+func (cs *ConnectionState) isActive() bool {
+	cs.mutex.Lock()
+	defer cs.mutex.Unlock()
+	return cs.isConnected
+}
+
+// Add global connection state
+var connState = ConnectionState{}
+
+// Add new types and globals for IP jailing
+type IPJail struct {
+	attempts map[string]int
+	jailed   map[string]time.Time
+	mutex    sync.RWMutex
+}
+
+const (
+	MaxAttempts = 5
+	JailTime    = 5 * time.Minute
+)
+
+var ipJail = IPJail{
+	attempts: make(map[string]int),
+	jailed:   make(map[string]time.Time),
+}
+
+// Add methods for IP jailing
+func (j *IPJail) incrementAttempt(ip string) int {
+	j.mutex.Lock()
+	defer j.mutex.Unlock()
+	j.attempts[ip]++
+	if j.attempts[ip] >= MaxAttempts {
+		j.jailed[ip] = time.Now().Add(JailTime)
+		delete(j.attempts, ip)
+	}
+	return j.attempts[ip]
+}
+
+func (j *IPJail) isJailed(ip string) bool {
+	j.mutex.RLock()
+	defer j.mutex.RUnlock()
+	if jailTime, exists := j.jailed[ip]; exists {
+		if time.Now().After(jailTime) {
+			// Auto-release from jail if time has expired
+			j.mutex.Lock()
+			delete(j.jailed, ip)
+			j.mutex.Unlock()
+			return false
+		}
+		return true
+	}
+	return false
+}
+
 func loadConfig() Config {
 	if _, err := os.Stat(ConfigFile); os.IsNotExist(err) {
 		defaultConfig := Config{
-			Mode:     "host",
-			IP:       "0.0.0.0",
-			Port:     12345,
-			Folder:   "./shared",
-			Password: "1337", // Default password
+			Mode:        "host",
+			IP:          "0.0.0.0",
+			Port:        12345,
+			Folder:      "./shared",
+			Password:    "1337",
+			WhitelistIP: "", // Empty means accept any IP
 		}
 		configData, _ := json.MarshalIndent(defaultConfig, "", "  ")
 		os.WriteFile(ConfigFile, configData, 0644)
@@ -95,6 +163,17 @@ func loadConfig() Config {
 	}
 
 	return config
+}
+
+// Add helper function to validate IP
+func isIPAllowed(config Config, remoteAddr string) bool {
+	if config.WhitelistIP == "" {
+		return true // Accept any IP if whitelist is empty
+	}
+
+	// Extract IP from remoteAddr (removes port)
+	clientIP := strings.Split(remoteAddr, ":")[0]
+	return clientIP == config.WhitelistIP
 }
 
 func authenticateConnection(conn net.Conn, expectedPassword string) bool {
@@ -139,12 +218,51 @@ func startHost(config Config) {
 			continue
 		}
 
-		// Authenticate the connection
-		if !authenticateConnection(conn, config.Password) {
-			logMessage("Authentication failed. Connection rejected.\n")
+		// Extract IP from remote address
+		remoteAddr := conn.RemoteAddr().String()
+		clientIP := strings.Split(remoteAddr, ":")[0]
+
+		// Check if IP is jailed
+		if ipJail.isJailed(clientIP) {
+			// logMessage("Connection rejected: IP %s is temporarily blocked\n", clientIP)
 			conn.Close()
 			continue
 		}
+
+		// Check if IP is allowed
+		if !isIPAllowed(config, remoteAddr) {
+			attempts := ipJail.incrementAttempt(clientIP)
+			remaining := MaxAttempts - attempts
+			if remaining > 0 {
+				logMessage("Connection rejected from non-whitelisted IP: %s (%d attempts remaining)\n",
+					clientIP, remaining)
+			} else {
+				logMessage("IP %s has been temporarily blocked for %v\n",
+					clientIP, JailTime)
+			}
+			conn.Close()
+			continue
+		}
+
+		// Authenticate the connection
+		if !authenticateConnection(conn, config.Password) {
+			attempts := ipJail.incrementAttempt(clientIP)
+			remaining := MaxAttempts - attempts
+			if remaining > 0 {
+				logMessage("Authentication failed from %s (%d attempts remaining)\n",
+					clientIP, remaining)
+			} else {
+				logMessage("IP %s has been temporarily blocked for %v\n",
+					clientIP, JailTime)
+			}
+			conn.Close()
+			continue
+		}
+
+		// Reset attempts on successful authentication
+		ipJail.mutex.Lock()
+		delete(ipJail.attempts, clientIP)
+		ipJail.mutex.Unlock()
 
 		// Close the previous connection if it exists
 		connMutex.Lock()
@@ -155,14 +273,24 @@ func startHost(config Config) {
 		connMutex.Unlock()
 
 		logMessage("Peer connected and authenticated.\n")
-
+		// print peer IP
+		logMessage("Peer IP: %s\n", conn.RemoteAddr().String())
 		// Handle the connection in a new goroutine
 		go handleConnection(config, conn, &connMutex, &currentConn)
 	}
 }
 
 func connectToHost(config Config) {
+	// Initialize connection state
+	connState.setConnected(false)
+
 	for {
+		// Check if already connected
+		if connState.isActive() {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
 		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", config.IP, config.Port))
 		if err != nil {
 			logMessage("Host not available. Retrying in 5 seconds...\n")
@@ -170,12 +298,16 @@ func connectToHost(config Config) {
 			continue
 		}
 
+		// Set connected state
+		connState.setConnected(true)
+
 		// Send authentication message
 		authMessage := AuthMessage{Password: config.Password}
 		encoder := json.NewEncoder(conn)
 		if err := encoder.Encode(authMessage); err != nil {
 			logMessage("Failed to send authentication: %v\n", err)
 			conn.Close()
+			connState.setConnected(false)
 			continue
 		}
 
@@ -185,6 +317,8 @@ func connectToHost(config Config) {
 		if err := decoder.Decode(&response); err != nil {
 			logMessage("Failed to receive authentication response: %v\n", err)
 			conn.Close()
+			connState.setConnected(false)
+			time.Sleep(5 * time.Second) // Add delay before reconnection attempt
 			continue
 		}
 
@@ -199,6 +333,10 @@ func connectToHost(config Config) {
 
 		logMessage("Connected and authenticated to host.\n")
 		handleConnection(config, conn, nil, nil)
+
+		// Reset connection state after disconnection
+		connState.setConnected(false)
+		time.Sleep(1 * time.Second) // Add delay before reconnection attempt
 	}
 }
 
@@ -214,6 +352,11 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 				*currentConn = nil
 			}
 			connMutex.Unlock()
+		}
+
+		// Reset connection state for peer
+		if config.Mode == "peer" {
+			connState.setConnected(false)
 		}
 	}()
 
@@ -243,9 +386,9 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 			if err != nil {
 				if err == io.EOF {
 					logMessage("Peer disconnected.\n")
-					// Reconnect if this is the peer in case of disconnection from server
-					if config.Mode == "peer" {
-						connectToHost(config)
+					// Only attempt reconnection if we're a peer and not already connecting
+					if config.Mode == "peer" && !connState.isActive() {
+						go connectToHost(config)
 					}
 				} else {
 					logMessage("Error reading message: %v\n", err)
