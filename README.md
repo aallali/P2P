@@ -10,7 +10,7 @@ A simple peer-to-peer file synchronization tool written in Go that allows real-t
 
 ## Quick Start1. 
 Build the application:   
-```bash   
+```bash
 go build   
 ```
 2. Run the application first time to generate config:   
@@ -41,11 +41,30 @@ go build
 ./p2p   
 ```
 ## How It Works
-- Host listens for incoming connections
-- Peer connects to the host
-- Both sides monitor their shared folders for changes
-- Changes are automatically synchronized between nodes
-- Periodic ping/pong ensures connection health
+1. Upload a file (auto-adds it to the list):
+   ```bash
+   /up /path/to/file.txt
+   ```
+2. Watch a file (auto-adds it to the list):
+   ```bash
+   /w /path/to/file.txt
+   ```
+3. List files:
+   ```bash
+   /ls
+   ```
+   Output:
+   ```
+   Index | Watched | Size | Path
+      0 |     YES | 1024 | /path/to/file.txt
+   ```
+
+4. Stop watching a file:
+   ```bash
+   /woff #0
+   ```
+
+---
 
 ## Build Requirements
 

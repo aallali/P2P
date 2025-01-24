@@ -35,6 +35,19 @@ type Message struct {
 	Content string `json:"content"` // File content (base64 encoded)
 }
 
+// FileEntry represents a file in memory
+type FileEntry struct {
+	Path    string // Full path of the file
+	Size    int64  // Size of the file
+	Watched bool   // Whether the file is being watched
+}
+
+// FileManager manages the list of files
+type FileManager struct {
+	Files []FileEntry
+	Mutex sync.Mutex
+}
+
 func loadConfig() Config {
 	if _, err := os.Stat(ConfigFile); os.IsNotExist(err) {
 		defaultConfig := Config{
@@ -135,7 +148,10 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 	receivedFiles := make(map[string]bool)
 	var receivedFilesMutex sync.Mutex
 
-	// Start a file watcher for the /watch command
+	// File manager to handle file entries
+	fileManager := FileManager{}
+
+	// Start a file watcher for the /w command
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		fmt.Println("Error creating watcher:", err)
@@ -192,24 +208,182 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 	go func() {
 		for scanner.Scan() {
 			command := scanner.Text()
-			if strings.HasPrefix(command, "/upload ") {
-				// Upload a file
-				filePath := strings.TrimPrefix(command, "/upload ")
+			parts := strings.Fields(command)
+			if len(parts) == 0 {
+				continue
+			}
+
+			switch parts[0] {
+			case "/up":
+				if len(parts) < 2 {
+					fmt.Println("Usage: /up <file> or /up #<number>")
+					continue
+				}
+				filePath := parts[1]
+				if strings.HasPrefix(filePath, "#") {
+					// Upload by index
+					index := parseIndex(filePath)
+					if index == -1 {
+						fmt.Println("Invalid index.")
+						continue
+					}
+					fileManager.Mutex.Lock()
+					if index >= len(fileManager.Files) {
+						fmt.Println("Index out of range.")
+						fileManager.Mutex.Unlock()
+						continue
+					}
+					filePath = fileManager.Files[index].Path
+					fileManager.Mutex.Unlock()
+				} else {
+					// Auto-add the file if it's not already in the list
+					fileManager.Mutex.Lock()
+					if !fileManager.contains(filePath) {
+						fileInfo, err := os.Stat(filePath)
+						if err != nil {
+							fmt.Println("Error accessing file:", err)
+							fileManager.Mutex.Unlock()
+							continue
+						}
+						fileManager.Files = append(fileManager.Files, FileEntry{
+							Path:    filePath,
+							Size:    fileInfo.Size(),
+							Watched: false,
+						})
+						fmt.Printf("Added file: %s\n", filePath)
+					}
+					fileManager.Mutex.Unlock()
+				}
 				if err := sendFile(conn, filePath, connMutex, currentConn); err != nil {
 					fmt.Println("Error uploading file:", err)
 				} else {
 					fmt.Println("File uploaded successfully!")
 				}
-			} else if strings.HasPrefix(command, "/watch ") {
-				// Watch a file for changes
-				filePath := strings.TrimPrefix(command, "/watch ")
+
+			case "/w":
+				if len(parts) < 2 {
+					fmt.Println("Usage: /w <file> or /w #<number>")
+					continue
+				}
+				filePath := parts[1]
+				if strings.HasPrefix(filePath, "#") {
+					// Watch by index
+					index := parseIndex(filePath)
+					if index == -1 {
+						fmt.Println("Invalid index.")
+						continue
+					}
+					fileManager.Mutex.Lock()
+					if index >= len(fileManager.Files) {
+						fmt.Println("Index out of range.")
+						fileManager.Mutex.Unlock()
+						continue
+					}
+					filePath = fileManager.Files[index].Path
+					fileManager.Mutex.Unlock()
+				} else {
+					// Auto-add the file if it's not already in the list
+					fileManager.Mutex.Lock()
+					if !fileManager.contains(filePath) {
+						fileInfo, err := os.Stat(filePath)
+						if err != nil {
+							fmt.Println("Error accessing file:", err)
+							fileManager.Mutex.Unlock()
+							continue
+						}
+						fileManager.Files = append(fileManager.Files, FileEntry{
+							Path:    filePath,
+							Size:    fileInfo.Size(),
+							Watched: false,
+						})
+						fmt.Printf("Added file: %s\n", filePath)
+					}
+					fileManager.Mutex.Unlock()
+				}
 				if err := watcher.Add(filePath); err != nil {
 					fmt.Println("Error watching file:", err)
 				} else {
 					fmt.Printf("Now watching: %s\n", filePath)
+					fileManager.Mutex.Lock()
+					for i := range fileManager.Files {
+						if fileManager.Files[i].Path == filePath {
+							fileManager.Files[i].Watched = true
+							break
+						}
+					}
+					fileManager.Mutex.Unlock()
 				}
-			} else {
-				fmt.Println("Unknown command. Use '/upload <file>' or '/watch <file>'.")
+
+			case "/woff":
+				if len(parts) < 2 {
+					fmt.Println("Usage: /woff <file> or /woff #<number>")
+					continue
+				}
+				filePath := parts[1]
+				if strings.HasPrefix(filePath, "#") {
+					// Unwatch by index
+					index := parseIndex(filePath)
+					if index == -1 {
+						fmt.Println("Invalid index.")
+						continue
+					}
+					fileManager.Mutex.Lock()
+					if index >= len(fileManager.Files) {
+						fmt.Println("Index out of range.")
+						fileManager.Mutex.Unlock()
+						continue
+					}
+					filePath = fileManager.Files[index].Path
+					fileManager.Mutex.Unlock()
+				}
+				if err := watcher.Remove(filePath); err != nil {
+					fmt.Println("Error unwatching file:", err)
+				} else {
+					fmt.Printf("Stopped watching: %s\n", filePath)
+					fileManager.Mutex.Lock()
+					for i := range fileManager.Files {
+						if fileManager.Files[i].Path == filePath {
+							fileManager.Files[i].Watched = false
+							break
+						}
+					}
+					fileManager.Mutex.Unlock()
+				}
+
+			case "/add":
+				if len(parts) < 2 {
+					fmt.Println("Usage: /add <file>")
+					continue
+				}
+				filePath := parts[1]
+				fileInfo, err := os.Stat(filePath)
+				if err != nil {
+					fmt.Println("Error accessing file:", err)
+					continue
+				}
+				fileManager.Mutex.Lock()
+				fileManager.Files = append(fileManager.Files, FileEntry{
+					Path:    filePath,
+					Size:    fileInfo.Size(),
+					Watched: false,
+				})
+				fileManager.Mutex.Unlock()
+				fmt.Printf("Added file: %s\n", filePath)
+
+			case "/ls":
+				fileManager.Mutex.Lock()
+				fmt.Println("Index | Watched | Size | Path")
+				for i, file := range fileManager.Files {
+					watchedStatus := "NO"
+					if file.Watched {
+						watchedStatus = "YES"
+					}
+					fmt.Printf("%5d | %7s | %4d | %s\n", i, watchedStatus, file.Size, file.Path)
+				}
+				fileManager.Mutex.Unlock()
+
+			default:
+				fmt.Println("Unknown command. Use /up, /w, /woff, /add, or /ls.")
 			}
 		}
 	}()
@@ -291,6 +465,25 @@ func readMessage(reader *bufio.Reader) (Message, error) {
 	}
 
 	return message, nil
+}
+
+func parseIndex(s string) int {
+	var index int
+	_, err := fmt.Sscanf(s, "#%d", &index)
+	if err != nil {
+		return -1
+	}
+	return index
+}
+
+// Helper function to check if a file is already in the list
+func (fm *FileManager) contains(filePath string) bool {
+	for _, file := range fm.Files {
+		if file.Path == filePath {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {
