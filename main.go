@@ -6,7 +6,7 @@
 //   License : MIT                                                            //
 //                                                                            //
 //   Created: 2025/01/24 17:27:43 by aallali                                  //
-//   Updated: 2025/01/25 12:48:47 by aallali                                  //
+//   Updated: 2025/01/25 15:47:58 by aallali                                  //
 // ************************************************************************** //
 
 package main
@@ -108,6 +108,12 @@ var ipJail = IPJail{
 	jailed:   make(map[string]time.Time),
 }
 
+// CurrentConn holds the active network connection
+var CurrentConn net.Conn
+
+// ConnMutex guards access to CurrentConn
+var ConnMutex sync.Mutex
+
 // Add methods for IP jailing
 func (j *IPJail) incrementAttempt(ip string) int {
 	j.mutex.Lock()
@@ -189,13 +195,13 @@ func isIPAllowed(config Config, remoteAddr string) bool {
 	return clientIP == config.WhitelistIP
 }
 
-func authenticateConnection(conn net.Conn, expectedPassword string) bool {
+func authenticateConnection(expectedPassword string) bool {
 	// Set a timeout for authentication
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
-	defer conn.SetDeadline(time.Time{})
+	CurrentConn.SetDeadline(time.Now().Add(10 * time.Second))
+	defer CurrentConn.SetDeadline(time.Time{})
 
 	var authMessage AuthMessage
-	decoder := json.NewDecoder(conn)
+	decoder := json.NewDecoder(CurrentConn)
 	if err := decoder.Decode(&authMessage); err != nil {
 		return false
 	}
@@ -205,7 +211,7 @@ func authenticateConnection(conn net.Conn, expectedPassword string) bool {
 	if authMessage.Password == expectedPassword {
 		response.Status = "ok"
 	}
-	encoder := json.NewEncoder(conn)
+	encoder := json.NewEncoder(CurrentConn)
 	encoder.Encode(response)
 
 	return authMessage.Password == expectedPassword
@@ -219,13 +225,8 @@ func startHost(config Config) {
 	defer listener.Close()
 	logMessage("Hosting on %s:%d. Waiting for connection...\n", config.IP, config.Port)
 
-	var (
-		currentConn net.Conn
-		connMutex   sync.Mutex
-	)
-
 	for {
-		conn, err := listener.Accept()
+		CurrentConn, err = listener.Accept()
 		if err != nil {
 			logMessage("Error accepting connection: %v\n", err)
 			continue
@@ -237,20 +238,20 @@ func startHost(config Config) {
 			logMessage("Peer already connected. Rejecting new connection...\n")
 			// send rejection msg to that connection
 			rejectionMessage := Message{Action: "notification", Content: "Peer already connected. Try again later."}
-			encoder := json.NewEncoder(conn)
+			encoder := json.NewEncoder(CurrentConn)
 			encoder.Encode(rejectionMessage)
-			conn.Close()
+			CurrentConn.Close()
 			continue
 		}
 
 		// Extract IP from remote address
-		remoteAddr := conn.RemoteAddr().String()
+		remoteAddr := CurrentConn.RemoteAddr().String()
 		clientIP := strings.Split(remoteAddr, ":")[0]
 
 		// Check if IP is jailed
 		if ipJail.isJailed(clientIP) {
 			// logMessage("Connection rejected: IP %s is temporarily blocked\n", clientIP)
-			conn.Close()
+			CurrentConn.Close()
 			continue
 		}
 
@@ -265,12 +266,12 @@ func startHost(config Config) {
 				logMessage("IP %s has been temporarily blocked for %v\n",
 					clientIP, JailTime)
 			}
-			conn.Close()
+			CurrentConn.Close()
 			continue
 		}
 
 		// Authenticate the connection
-		if !authenticateConnection(conn, config.Password) {
+		if !authenticateConnection(config.Password) {
 			attempts := ipJail.incrementAttempt(clientIP)
 			remaining := MaxAttempts - attempts
 			if remaining > 0 {
@@ -280,7 +281,7 @@ func startHost(config Config) {
 				logMessage("IP %s has been temporarily blocked for %v\n",
 					clientIP, JailTime)
 			}
-			conn.Close()
+			CurrentConn.Close()
 			continue
 		}
 
@@ -289,27 +290,15 @@ func startHost(config Config) {
 		delete(ipJail.attempts, clientIP)
 		ipJail.mutex.Unlock()
 
-		// Close the previous connection if it exists
-		connMutex.Lock()
-		if currentConn != nil {
-			currentConn.Close()
-		}
-		currentConn = conn
-		connMutex.Unlock()
-
-		logMessage("Welcome Peer IP: %s\n", conn.RemoteAddr().String())
+		logMessage("Welcome Peer IP: %s\n", CurrentConn.RemoteAddr().String())
 		connState.setConnected(true)
 		// Handle the connection in a new goroutine
-		go handleConnection(config, conn, &connMutex, &currentConn)
+		go handleConnection(config)
 	}
 }
 
 func connectToHost(config Config) {
-	// Initialize connection state
-	connState.setConnected(false)
-
 	for {
-		// Check if already connected
 		if connState.isActive() {
 			time.Sleep(1 * time.Second)
 			continue
@@ -322,6 +311,10 @@ func connectToHost(config Config) {
 			continue
 		}
 
+		ConnMutex.Lock()
+		CurrentConn = conn
+		ConnMutex.Unlock()
+
 		// Set connected state
 		connState.setConnected(true)
 
@@ -330,7 +323,10 @@ func connectToHost(config Config) {
 		encoder := json.NewEncoder(conn)
 		if err := encoder.Encode(authMessage); err != nil {
 			logMessage("Failed to send authentication: %v\n", err)
-			conn.Close()
+			ConnMutex.Lock()
+			CurrentConn.Close()
+			CurrentConn = nil
+			ConnMutex.Unlock()
 			connState.setConnected(false)
 			continue
 		}
@@ -340,9 +336,12 @@ func connectToHost(config Config) {
 		decoder := json.NewDecoder(conn)
 		if err := decoder.Decode(&response); err != nil {
 			logMessage("Failed to receive authentication response: %v\n", err)
-			conn.Close()
+			ConnMutex.Lock()
+			CurrentConn.Close()
+			CurrentConn = nil
+			ConnMutex.Unlock()
 			connState.setConnected(false)
-			time.Sleep(5 * time.Second) // Add delay before reconnection attempt
+			time.Sleep(5 * time.Second)
 			continue
 		}
 
@@ -356,7 +355,7 @@ func connectToHost(config Config) {
 		}
 
 		logMessage("Connected and authenticated to host.\n")
-		handleConnection(config, conn, nil, nil)
+		handleConnection(config)
 
 		// Reset connection state after disconnection
 		connState.setConnected(false)
@@ -364,30 +363,25 @@ func connectToHost(config Config) {
 	}
 }
 
-func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, currentConn *net.Conn) {
+var fileManager = FileManager{}
+
+func handleConnection(config Config) {
 	defer func() {
 		logMessage("Peer disconnected.[0]\n")
-		conn.Close()
+		CurrentConn.Close()
 		connState.setConnected(false)
-		// Clear the current connection if this is the host
-		if connMutex != nil {
-			connMutex.Lock()
-			*currentConn = nil
-			connMutex.Unlock()
-		}
+		ConnMutex.Lock()
+		CurrentConn = nil
+		ConnMutex.Unlock()
 	}()
 
-	// Notify the other peer that we're connected
-	sendMessage(conn, Message{Action: "notification", Content: "Connected!"})
+	quit := make(chan bool)
 
-	// Track files received from the peer to avoid recursive uploads
+	sendMessage(Message{Action: "notification", Content: "Connected!"})
+
 	receivedFiles := make(map[string]bool)
 	var receivedFilesMutex sync.Mutex
 
-	// File manager to handle file entries
-	fileManager := FileManager{}
-
-	// Start a file watcher for the /w command
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		logMessage("Error creating watcher: %v\n", err)
@@ -395,287 +389,283 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 	}
 	defer watcher.Close()
 
-	// Handle incoming messages
 	go func() {
-		reader := bufio.NewReader(conn)
+		reader := bufio.NewReader(CurrentConn)
 		for {
-			message, err := readMessage(reader)
-			if err != nil {
-				if err == io.EOF {
-					logMessage("Peer disconnected.[1]\n")
-					// Only attempt reconnection if we're a peer and not already connecting
-					if config.Mode == "peer" && !connState.isActive() {
-						go connectToHost(config)
-					}
-				} else {
-					logMessage("Error reading message: %v\n", err)
-				}
+			select {
+			case <-quit:
+				logMessage("Quit go routine 1\n")
 				return
-			}
-
-			switch message.Action {
-			case "upload":
-				filePath := filepath.Join(config.Folder, message.Path)
-				os.MkdirAll(filepath.Dir(filePath), 0755)
-
-				// Decode content
-				content, err := base64.StdEncoding.DecodeString(message.Content)
+			default:
+				message, err := readMessage(reader)
 				if err != nil {
-					logMessage("Error decoding content: %v\n", err)
-					continue
-				}
+					if err == io.EOF {
+						logMessage("Peer disconnected.[1]\n")
+						quit <- true
 
-				// Get or create assembly
-				assemblyMutex.Lock()
-				assembly, exists := fileAssemblies[filePath]
-				if !exists {
-					tempFile, err := os.CreateTemp("", "upload-*")
-					if err != nil {
-						assemblyMutex.Unlock()
-						logMessage("Error creating temp file: %v\n", err)
-						continue
-					}
-					assembly = &FileAssembly{
-						TotalSize: message.TotalSize,
-						TempFile:  tempFile,
-					}
-					fileAssemblies[filePath] = assembly
-				}
-				assemblyMutex.Unlock()
-
-				// Write chunk
-				if _, err := assembly.TempFile.Write(content); err != nil {
-					logMessage("Error writing chunk: %v\n", err)
-					continue
-				}
-
-				assembly.ReceivedSize += int64(len(content))
-				logMessage("\rDownloading %s: %d/%d bytes (%d%%)",
-					message.Path,
-					assembly.ReceivedSize,
-					assembly.TotalSize,
-					(assembly.ReceivedSize*100)/assembly.TotalSize,
-				)
-
-				// Check if complete
-				if assembly.ReceivedSize >= assembly.TotalSize {
-					assembly.TempFile.Close()
-					if err := os.Rename(assembly.TempFile.Name(), filePath); err != nil {
-						logMessage("\nError saving file: %v\n", err)
-						os.Remove(assembly.TempFile.Name())
+						return
 					} else {
-						fmt.Println()
-						logMessage("File saved: %s\n", filePath)
+						logMessage("Error reading message: %v\n", err)
+					}
+					return
+				}
+
+				switch message.Action {
+				case "upload":
+					filePath := filepath.Join(config.Folder, message.Path)
+					os.MkdirAll(filepath.Dir(filePath), 0755)
+
+					content, err := base64.StdEncoding.DecodeString(message.Content)
+					if err != nil {
+						logMessage("Error decoding content: %v\n", err)
+						continue
 					}
 
 					assemblyMutex.Lock()
-					delete(fileAssemblies, filePath)
+					assembly, exists := fileAssemblies[filePath]
+					if !exists {
+						tempFile, err := os.CreateTemp("", "upload-*")
+						if err != nil {
+							assemblyMutex.Unlock()
+							logMessage("Error creating temp file: %v\n", err)
+							continue
+						}
+						assembly = &FileAssembly{
+							TotalSize: message.TotalSize,
+							TempFile:  tempFile,
+						}
+						fileAssemblies[filePath] = assembly
+					}
 					assemblyMutex.Unlock()
 
-					// Mark as received temporarily
-					receivedFilesMutex.Lock()
-					receivedFiles[filePath] = true
-					receivedFilesMutex.Unlock()
+					if _, err := assembly.TempFile.Write(content); err != nil {
+						logMessage("Error writing chunk: %v\n", err)
+						continue
+					}
 
-					go func() {
-						time.Sleep(2 * time.Second)
+					assembly.ReceivedSize += int64(len(content))
+					logMessage("\rDownloading %s: %d/%d bytes (%d%%)",
+						message.Path,
+						assembly.ReceivedSize,
+						assembly.TotalSize,
+						(assembly.ReceivedSize*100)/assembly.TotalSize,
+					)
+
+					if assembly.ReceivedSize >= assembly.TotalSize {
+						assembly.TempFile.Close()
+						if err := os.Rename(assembly.TempFile.Name(), filePath); err != nil {
+							logMessage("\nError saving file: %v\n", err)
+							os.Remove(assembly.TempFile.Name())
+						} else {
+							fmt.Println()
+							logMessage("File saved: %s\n", filePath)
+						}
+
+						assemblyMutex.Lock()
+						delete(fileAssemblies, filePath)
+						assemblyMutex.Unlock()
+
 						receivedFilesMutex.Lock()
-						delete(receivedFiles, filePath)
+						receivedFiles[filePath] = true
 						receivedFilesMutex.Unlock()
-					}()
-				}
 
-			case "notification":
-				// Print notifications
-				logMessage("Notification from peer: %s\n", message.Content)
+						go func() {
+							time.Sleep(2 * time.Second)
+							receivedFilesMutex.Lock()
+							delete(receivedFiles, filePath)
+							receivedFilesMutex.Unlock()
+						}()
+					}
+
+				case "notification":
+					logMessage("Notification from peer: %s\n", message.Content)
+				}
 			}
 		}
 	}()
 
-	// Read commands from the user
 	scanner := bufio.NewScanner(os.Stdin)
 	go func() {
 		for scanner.Scan() {
-			command := scanner.Text()
-			parts := strings.Fields(command)
-			if len(parts) == 0 {
-				continue
-			}
-
-			switch parts[0] {
-			case "/up":
-				if len(parts) < 2 {
-					logMessage("Usage: /up <file> or /up #<number>\n")
-					continue
-				}
-				filePath := parts[1]
-				if strings.HasPrefix(filePath, "#") {
-					// Upload by index
-					index := parseIndex(filePath)
-					if index == -1 {
-						logMessage("Invalid index.\n")
-						continue
-					}
-					fileManager.Mutex.Lock()
-					if index >= len(fileManager.Files) {
-						logMessage("Index out of range.\n")
-						fileManager.Mutex.Unlock()
-						continue
-					}
-					filePath = fileManager.Files[index].Path
-					fileManager.Mutex.Unlock()
-				} else {
-					// Auto-add the file if it's not already in the list
-					fileManager.Mutex.Lock()
-					if !fileManager.contains(filePath) {
-						fileInfo, err := os.Stat(filePath)
-						if err != nil {
-							logMessage("Error accessing file: %v\n", err)
-							fileManager.Mutex.Unlock()
-							continue
-						}
-						fileManager.Files = append(fileManager.Files, FileEntry{
-							Path:    filePath,
-							Size:    fileInfo.Size(),
-							Watched: false,
-						})
-						logMessage("Added file: %s\n", filePath)
-					}
-					fileManager.Mutex.Unlock()
-				}
-				if err := sendFileWithProgress(conn, filePath, connMutex, currentConn); err != nil {
-					logMessage("Error uploading file: %v\n", err)
-				} else {
-					logMessage("File uploaded successfully!\n")
-				}
-
-			case "/w":
-				if len(parts) < 2 {
-					logMessage("Usage: /w <file> or /w #<number>\n")
-					continue
-				}
-				filePath := parts[1]
-				if strings.HasPrefix(filePath, "#") {
-					// Watch by index
-					index := parseIndex(filePath)
-					if index == -1 {
-						logMessage("Invalid index.\n")
-						continue
-					}
-					fileManager.Mutex.Lock()
-					if index >= len(fileManager.Files) {
-						logMessage("Index out of range.\n")
-						fileManager.Mutex.Unlock()
-						continue
-					}
-					filePath = fileManager.Files[index].Path
-					fileManager.Mutex.Unlock()
-				} else {
-					// Auto-add the file if it's not already in the list
-					fileManager.Mutex.Lock()
-					if !fileManager.contains(filePath) {
-						fileInfo, err := os.Stat(filePath)
-						if err != nil {
-							logMessage("Error accessing file: %v\n", err)
-							fileManager.Mutex.Unlock()
-							continue
-						}
-						fileManager.Files = append(fileManager.Files, FileEntry{
-							Path:    filePath,
-							Size:    fileInfo.Size(),
-							Watched: false,
-						})
-						logMessage("Added file: %s\n", filePath)
-					}
-					fileManager.Mutex.Unlock()
-				}
-				if err := watcher.Add(filePath); err != nil {
-					logMessage("Error watching file: %v\n", err)
-				} else {
-					logMessage("Now watching: %s\n", filePath)
-					fileManager.Mutex.Lock()
-					for i := range fileManager.Files {
-						if fileManager.Files[i].Path == filePath {
-							fileManager.Files[i].Watched = true
-							break
-						}
-					}
-					fileManager.Mutex.Unlock()
-				}
-
-			case "/woff":
-				if len(parts) < 2 {
-					logMessage("Usage: /woff <file> or /woff #<number>\n")
-					continue
-				}
-				filePath := parts[1]
-				if strings.HasPrefix(filePath, "#") {
-					// Unwatch by index
-					index := parseIndex(filePath)
-					if index == -1 {
-						logMessage("Invalid index.\n")
-						continue
-					}
-					fileManager.Mutex.Lock()
-					if index >= len(fileManager.Files) {
-						logMessage("Index out of range.\n")
-						fileManager.Mutex.Unlock()
-						continue
-					}
-					filePath = fileManager.Files[index].Path
-					fileManager.Mutex.Unlock()
-				}
-				if err := watcher.Remove(filePath); err != nil {
-					logMessage("Error unwatching file: %v\n", err)
-				} else {
-					logMessage("Stopped watching: %s\n", filePath)
-					fileManager.Mutex.Lock()
-					for i := range fileManager.Files {
-						if fileManager.Files[i].Path == filePath {
-							fileManager.Files[i].Watched = false
-							break
-						}
-					}
-					fileManager.Mutex.Unlock()
-				}
-
-			case "/add":
-				if len(parts) < 2 {
-					logMessage("Usage: /add <file>\n")
-					continue
-				}
-				filePath := parts[1]
-				fileInfo, err := os.Stat(filePath)
-				if err != nil {
-					logMessage("Error accessing file: %v\n", err)
-					continue
-				}
-				fileManager.Mutex.Lock()
-				fileManager.Files = append(fileManager.Files, FileEntry{
-					Path:    filePath,
-					Size:    fileInfo.Size(),
-					Watched: false,
-				})
-				fileManager.Mutex.Unlock()
-				logMessage("Added file: %s\n", filePath)
-
-			case "/ls":
-				fileManager.Mutex.Lock()
-				logMessage("Index | Watched | Size | Path\n")
-				for i, file := range fileManager.Files {
-					watchedStatus := "NO"
-					if file.Watched {
-						watchedStatus = "YES"
-					}
-					logMessage("%5d | %7s | %4d | %s\n", i, watchedStatus, file.Size, file.Path)
-				}
-				fileManager.Mutex.Unlock()
-
-			case "/cl":
-				clearConsole()
-
+			select {
+			case <-quit:
+				return
 			default:
-				logMessage(`
+				command := scanner.Text()
+				parts := strings.Fields(command)
+				if len(parts) == 0 {
+					continue
+				}
+
+				switch parts[0] {
+				case "/up":
+					if len(parts) < 2 {
+						logMessage("Usage: /up <file> or /up #<number>\n")
+						continue
+					}
+					filePath := parts[1]
+					if strings.HasPrefix(filePath, "#") {
+						index := parseIndex(filePath)
+						if index == -1 {
+							logMessage("Invalid index.\n")
+							continue
+						}
+						fileManager.Mutex.Lock()
+						if index >= len(fileManager.Files) {
+							logMessage("Index out of range.\n")
+							fileManager.Mutex.Unlock()
+							continue
+						}
+						filePath = fileManager.Files[index].Path
+						fileManager.Mutex.Unlock()
+					} else {
+						fileManager.Mutex.Lock()
+						if !fileManager.contains(filePath) {
+							fileInfo, err := os.Stat(filePath)
+							if err != nil {
+								logMessage("Error accessing file: %v\n", err)
+								fileManager.Mutex.Unlock()
+								continue
+							}
+							fileManager.Files = append(fileManager.Files, FileEntry{
+								Path:    filePath,
+								Size:    fileInfo.Size(),
+								Watched: false,
+							})
+							logMessage("Added file: %s\n", filePath)
+						}
+						fileManager.Mutex.Unlock()
+					}
+					if err := sendFileWithProgress(filePath); err != nil {
+						logMessage("Error uploading file: %v\n", err)
+					} else {
+						logMessage("File uploaded successfully!\n")
+					}
+
+				case "/w":
+					if len(parts) < 2 {
+						logMessage("Usage: /w <file> or /w #<number>\n")
+						continue
+					}
+					filePath := parts[1]
+					if strings.HasPrefix(filePath, "#") {
+						index := parseIndex(filePath)
+						if index == -1 {
+							logMessage("Invalid index.\n")
+							continue
+						}
+						fileManager.Mutex.Lock()
+						if index >= len(fileManager.Files) {
+							logMessage("Index out of range.\n")
+							fileManager.Mutex.Unlock()
+							continue
+						}
+						filePath = fileManager.Files[index].Path
+						fileManager.Mutex.Unlock()
+					} else {
+						fileManager.Mutex.Lock()
+						if !fileManager.contains(filePath) {
+							fileInfo, err := os.Stat(filePath)
+							if err != nil {
+								logMessage("Error accessing file: %v\n", err)
+								fileManager.Mutex.Unlock()
+								continue
+							}
+							fileManager.Files = append(fileManager.Files, FileEntry{
+								Path:    filePath,
+								Size:    fileInfo.Size(),
+								Watched: false,
+							})
+							logMessage("Added file: %s\n", filePath)
+						}
+						fileManager.Mutex.Unlock()
+					}
+					if err := watcher.Add(filePath); err != nil {
+						logMessage("Error watching file: %v\n", err)
+					} else {
+						logMessage("Now watching: %s\n", filePath)
+						fileManager.Mutex.Lock()
+						for i := range fileManager.Files {
+							if fileManager.Files[i].Path == filePath {
+								fileManager.Files[i].Watched = true
+								break
+							}
+						}
+						fileManager.Mutex.Unlock()
+					}
+
+				case "/woff":
+					if len(parts) < 2 {
+						logMessage("Usage: /woff <file> or /woff #<number>\n")
+						continue
+					}
+					filePath := parts[1]
+					if strings.HasPrefix(filePath, "#") {
+						index := parseIndex(filePath)
+						if index == -1 {
+							logMessage("Invalid index.\n")
+							continue
+						}
+						fileManager.Mutex.Lock()
+						if index >= len(fileManager.Files) {
+							logMessage("Index out of range.\n")
+							fileManager.Mutex.Unlock()
+							continue
+						}
+						filePath = fileManager.Files[index].Path
+						fileManager.Mutex.Unlock()
+					}
+					if err := watcher.Remove(filePath); err != nil {
+						logMessage("Error unwatching file: %v\n", err)
+					} else {
+						logMessage("Stopped watching: %s\n", filePath)
+						fileManager.Mutex.Lock()
+						for i := range fileManager.Files {
+							if fileManager.Files[i].Path == filePath {
+								fileManager.Files[i].Watched = false
+								break
+							}
+						}
+						fileManager.Mutex.Unlock()
+					}
+
+				case "/add":
+					if len(parts) < 2 {
+						logMessage("Usage: /add <file>\n")
+						continue
+					}
+					filePath := parts[1]
+					fileInfo, err := os.Stat(filePath)
+					if err != nil {
+						logMessage("Error accessing file: %v\n", err)
+						continue
+					}
+					fileManager.Mutex.Lock()
+					fileManager.Files = append(fileManager.Files, FileEntry{
+						Path:    filePath,
+						Size:    fileInfo.Size(),
+						Watched: false,
+					})
+					fileManager.Mutex.Unlock()
+					logMessage("Added file: %s\n", filePath)
+
+				case "/ls":
+					fileManager.Mutex.Lock()
+					logMessage("Index | Watched | Size | Path\n")
+					for i, file := range fileManager.Files {
+						watchedStatus := "NO"
+						if file.Watched {
+							watchedStatus = "YES"
+						}
+						logMessage("%5d | %7s | %4d | %s\n", i, watchedStatus, file.Size, file.Path)
+					}
+					fileManager.Mutex.Unlock()
+
+				case "/cl":
+					clearConsole()
+
+				default:
+					logMessage(`
 Unknown command. 
 Available commands:
 	- /add                       Add a file to the alias list
@@ -685,17 +675,19 @@ Available commands:
 	- /w <file> or #<number>     Watch a file
 	- /woff <file> or #<number>  Cancel watch for a file
 `)
+				}
 			}
 		}
 	}()
 
-	// Handle file watcher events with debounce
 	var (
 		lastEventTime time.Time
 		debounceDelay = 500 * time.Millisecond
 	)
 	for {
 		select {
+		case <-quit:
+			return
 		case event := <-watcher.Events:
 			if event.Op&fsnotify.Write == fsnotify.Write {
 				filePath := event.Name
@@ -708,14 +700,12 @@ Available commands:
 				}
 				receivedFilesMutex.Unlock()
 
-				// Debounce the event
 				if time.Since(lastEventTime) < debounceDelay {
 					continue
 				}
 				lastEventTime = time.Now()
 
-				// Upload the file to the peer
-				if err := sendFileWithProgress(conn, filePath, connMutex, currentConn); err != nil {
+				if err := sendFileWithProgress(filePath); err != nil {
 					logMessage("Error uploading file: %v\n", err)
 				} else {
 					logMessage("File uploaded automatically: %s\n", filePath)
@@ -727,7 +717,7 @@ Available commands:
 	}
 }
 
-func sendFileWithProgress(conn net.Conn, filePath string, connMutex *sync.Mutex, currentConn *net.Conn) error {
+func sendFileWithProgress(filePath string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -761,7 +751,7 @@ func sendFileWithProgress(conn net.Conn, filePath string, connMutex *sync.Mutex,
 			TotalSize: totalSize,
 		}
 
-		if err := sendMessage(conn, message); err != nil {
+		if err := sendMessage(message); err != nil {
 			return fmt.Errorf("send error at %d/%d bytes: %v", sentBytes, totalSize, err)
 		}
 
@@ -777,12 +767,12 @@ func sendFileWithProgress(conn net.Conn, filePath string, connMutex *sync.Mutex,
 	return nil
 }
 
-func sendMessage(conn net.Conn, message Message) error {
+func sendMessage(message Message) error {
 	data, err := json.Marshal(message)
 	if err != nil {
 		return err
 	}
-	_, err = conn.Write(append(data, '\n'))
+	_, err = CurrentConn.Write(append(data, '\n'))
 	return err
 }
 
