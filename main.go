@@ -6,7 +6,7 @@
 //   License : MIT                                                            //
 //                                                                            //
 //   Created: 2025/01/24 17:27:43 by aallali                                  //
-//   Updated: 2025/01/25 00:36:58 by aallali                                  //
+//   Updated: 2025/01/25 12:48:47 by aallali                                  //
 // ************************************************************************** //
 
 package main
@@ -135,6 +135,19 @@ func (j *IPJail) isJailed(ip string) bool {
 	}
 	return false
 }
+
+// Add new type for file assembly
+type FileAssembly struct {
+	TotalSize    int64
+	ReceivedSize int64
+	TempFile     *os.File
+}
+
+// Add map to track file assemblies
+var (
+	fileAssemblies = make(map[string]*FileAssembly)
+	assemblyMutex  sync.Mutex
+)
 
 func loadConfig() Config {
 	if _, err := os.Stat(ConfigFile); os.IsNotExist(err) {
@@ -402,31 +415,70 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 
 			switch message.Action {
 			case "upload":
-				// Save the uploaded file
 				filePath := filepath.Join(config.Folder, message.Path)
 				os.MkdirAll(filepath.Dir(filePath), 0755)
 
-				// Decode the content
+				// Decode content
 				content, err := base64.StdEncoding.DecodeString(message.Content)
 				if err != nil {
-					logMessage("Error decoding file content: %v\n", err)
+					logMessage("Error decoding content: %v\n", err)
 					continue
 				}
 
-				// Write the file
-				if err := os.WriteFile(filePath, content, 0644); err != nil {
-					logMessage("Error saving file: %v\n", err)
-				} else {
-					logMessage("\rFile saved: %s (or downloading...)", filePath)
+				// Get or create assembly
+				assemblyMutex.Lock()
+				assembly, exists := fileAssemblies[filePath]
+				if !exists {
+					tempFile, err := os.CreateTemp("", "upload-*")
+					if err != nil {
+						assemblyMutex.Unlock()
+						logMessage("Error creating temp file: %v\n", err)
+						continue
+					}
+					assembly = &FileAssembly{
+						TotalSize: message.TotalSize,
+						TempFile:  tempFile,
+					}
+					fileAssemblies[filePath] = assembly
+				}
+				assemblyMutex.Unlock()
 
-					// Mark the file as received to avoid recursive uploads
+				// Write chunk
+				if _, err := assembly.TempFile.Write(content); err != nil {
+					logMessage("Error writing chunk: %v\n", err)
+					continue
+				}
+
+				assembly.ReceivedSize += int64(len(content))
+				logMessage("\rDownloading %s: %d/%d bytes (%d%%)",
+					message.Path,
+					assembly.ReceivedSize,
+					assembly.TotalSize,
+					(assembly.ReceivedSize*100)/assembly.TotalSize,
+				)
+
+				// Check if complete
+				if assembly.ReceivedSize >= assembly.TotalSize {
+					assembly.TempFile.Close()
+					if err := os.Rename(assembly.TempFile.Name(), filePath); err != nil {
+						logMessage("\nError saving file: %v\n", err)
+						os.Remove(assembly.TempFile.Name())
+					} else {
+						fmt.Println()
+						logMessage("File saved: %s\n", filePath)
+					}
+
+					assemblyMutex.Lock()
+					delete(fileAssemblies, filePath)
+					assemblyMutex.Unlock()
+
+					// Mark as received temporarily
 					receivedFilesMutex.Lock()
 					receivedFiles[filePath] = true
 					receivedFilesMutex.Unlock()
 
-					// Clear the received flag after a short delay
 					go func() {
-						time.Sleep(2 * time.Second) // Adjust delay as needed
+						time.Sleep(2 * time.Second)
 						receivedFilesMutex.Lock()
 						delete(receivedFiles, filePath)
 						receivedFilesMutex.Unlock()
@@ -676,55 +728,52 @@ Available commands:
 }
 
 func sendFileWithProgress(conn net.Conn, filePath string, connMutex *sync.Mutex, currentConn *net.Conn) error {
-	// Open the file
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	// Get file size
 	fileInfo, err := file.Stat()
 	if err != nil {
 		return err
 	}
-	fileSize := fileInfo.Size()
+	totalSize := fileInfo.Size()
+	sentBytes := int64(0)
 
-	// Initialize progress tracking
-	var sentBytes int64
-	startTime := time.Now()
+	// Use smaller chunks to avoid base64 overhead
+	buffer := make([]byte, 1024*1024) // 1MB chunks
 
-	// Send the file in chunks
-	buffer := make([]byte, ChunkSize)
-	for {
+	for sentBytes < totalSize {
 		n, err := file.Read(buffer)
 		if err != nil && err != io.EOF {
-			return err
+			return fmt.Errorf("read error: %v", err)
 		}
 		if n == 0 {
 			break
 		}
 
-		// Send the chunk
+		chunk := buffer[:n]
 		message := Message{
 			Action:    "upload",
 			Path:      filepath.Base(filePath),
-			Content:   base64.StdEncoding.EncodeToString(buffer[:n]),
-			TotalSize: fileSize,
-		}
-		if err := sendMessage(conn, message); err != nil {
-			return err
+			Content:   base64.StdEncoding.EncodeToString(chunk),
+			TotalSize: totalSize,
 		}
 
-		// Update progress
+		if err := sendMessage(conn, message); err != nil {
+			return fmt.Errorf("send error at %d/%d bytes: %v", sentBytes, totalSize, err)
+		}
+
 		sentBytes += int64(n)
-		progress := float64(sentBytes) / float64(fileSize) * 100
-		elapsed := time.Since(startTime).Seconds()
-		speed := float64(sentBytes) / elapsed / 1024 // Speed in KB/s
-		logMessage("\rUploading: %.2f%% (%.2f KB/s)", progress, speed)
+		logMessage("\rUploading: %d/%d bytes (%d%%)", sentBytes, totalSize, (sentBytes*100)/totalSize)
 	}
 
-	logMessage("\nUpload complete!\n")
+	if sentBytes != totalSize {
+		return fmt.Errorf("incomplete transfer: sent %d/%d bytes", sentBytes, totalSize)
+	}
+
+	logMessage("\nFile transfer completed: %s (%d bytes)\n", filepath.Base(filePath), totalSize)
 	return nil
 }
 
