@@ -6,7 +6,7 @@
 //   License : MIT                                                            //
 //                                                                            //
 //   Created: 2025/01/24 17:27:43 by aallali                                  //
-//   Updated: 2025/01/25 22:46:16 by aallali                                  //
+//   Updated: 2025/01/25 23:39:03 by aallali                                  //
 // ************************************************************************** //
 
 package main
@@ -83,6 +83,34 @@ func getInput() (string, error) {
 		}
 		return line, nil // Return user input
 	}
+}
+
+func parseCommand(input string) (string, string) {
+	// Trim the input to remove leading/trailing spaces
+	input = strings.TrimSpace(input)
+
+	// Split the input into parts, but handle quoted arguments
+	parts := strings.Fields(input)
+
+	if len(parts) == 0 {
+		return "", ""
+	}
+	// First part is the command
+	command := parts[0]
+
+	// Combine the rest as the second argument
+	argument := strings.Join(parts[1:], " ")
+
+	if argument == "" {
+		return command, argument
+	}
+	// Remove quotes from the argument if it starts and ends with them
+	if len(argument) > 0 && argument[0] == '"' && argument[len(argument)-1] == '"' {
+		argument = argument[1 : len(argument)-1]
+	}
+
+	argument = strings.TrimSpace(argument)
+	return command, argument
 }
 
 const (
@@ -566,18 +594,20 @@ func handleConnection(config Config) {
 					os.Exit(1)
 					return
 				}
-				parts := strings.Fields(command)
-				if len(parts) == 0 {
+
+				cmd, argument := parseCommand(command)
+
+				if cmd == "" {
 					continue
 				}
 
-				switch parts[0] {
+				switch cmd {
 				case "/up":
-					if len(parts) < 2 {
+					if argument == "" {
 						logMessage("Usage: /up <file> or /up #<number>\n")
 						continue
 					}
-					filePath := parts[1]
+					filePath := argument
 					if strings.HasPrefix(filePath, "#") {
 						index := parseIndex(filePath)
 						if index == -1 {
@@ -618,11 +648,11 @@ func handleConnection(config Config) {
 					}
 
 				case "/w":
-					if len(parts) < 2 {
+					if argument == "" {
 						logMessage("Usage: /w <file> or /w #<number>\n")
 						continue
 					}
-					filePath := parts[1]
+					filePath := argument
 					if strings.HasPrefix(filePath, "#") {
 						index := parseIndex(filePath)
 						if index == -1 {
@@ -674,11 +704,11 @@ func handleConnection(config Config) {
 					fileManager.Mutex.Unlock()
 
 				case "/woff":
-					if len(parts) < 2 {
+					if argument == "" {
 						logMessage("Usage: /woff <file> or /woff #<number>\n")
 						continue
 					}
-					filePath := parts[1]
+					filePath := argument
 					if strings.HasPrefix(filePath, "#") {
 						index := parseIndex(filePath)
 						if index == -1 {
@@ -709,11 +739,11 @@ func handleConnection(config Config) {
 					}
 
 				case "/add":
-					if len(parts) < 2 {
+					if argument == "" {
 						logMessage("Usage: /add <file>\n")
 						continue
 					}
-					filePath := parts[1]
+					filePath := argument
 					fileInfo, err := os.Stat(filePath)
 					if err != nil {
 						logMessage("Error accessing file: %v\n", err)
