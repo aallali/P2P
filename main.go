@@ -70,6 +70,18 @@ type FileManager struct {
 	Mutex sync.Mutex
 }
 
+func removeFileEntry(filePath string) {
+	// remove file from list if upload failed
+	fileManager.Mutex.Lock()
+	for i, file := range fileManager.Files {
+		if file.Path == filePath {
+			fileManager.Files = append(fileManager.Files[:i], fileManager.Files[i+1:]...)
+			break
+		}
+	}
+	fileManager.Mutex.Unlock()
+}
+
 // Add new type for connection state management
 type ConnectionState struct {
 	isConnected bool
@@ -538,6 +550,7 @@ func handleConnection(config Config) {
 					}
 					if err := sendFileWithProgress(filePath); err != nil {
 						logMessage("Error uploading file: %v\n", err)
+						removeFileEntry(filePath)
 					} else {
 						logMessage("File uploaded successfully!\n")
 					}
