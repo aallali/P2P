@@ -6,7 +6,7 @@
 //   License : MIT                                                            //
 //                                                                            //
 //   Created: 2025/01/24 17:27:43 by aallali                                  //
-//   Updated: 2025/01/25 23:39:03 by aallali                                  //
+//   Updated: 2025/01/26 00:07:45 by aallali                                  //
 // ************************************************************************** //
 
 package main
@@ -31,14 +31,56 @@ import (
 
 // Define completer for auto-completion
 var completer = readline.NewPrefixCompleter(
-	readline.PcItem("/up"),
-	readline.PcItem("/w"),
+	readline.PcItem("/up", readline.PcItemDynamic(filePathCompleter)),
+	readline.PcItem("/w", readline.PcItemDynamic(filePathCompleter)),
 	readline.PcItem("/woff"),
-	readline.PcItem("/add"),
+	readline.PcItem("/add", readline.PcItemDynamic(filePathCompleter)),
 	readline.PcItem("/ls"),
 	readline.PcItem("/cl"),
-	readline.PcItem("/up shared/"),
 )
+
+// File path completer
+func filePathCompleter(line string) []string {
+	// Split the line into command and argument
+	cmd, argument := parseCommand(line)
+	if cmd == "" {
+		return nil
+	}
+
+	// Get the current input path
+	currentPath := argument
+
+	// Get the directory to search
+	dir := filepath.Dir(currentPath)
+
+	// Check if the current path is a directory and traverse into it if needed
+	if strings.HasSuffix(currentPath, "/") {
+		dir = currentPath
+		currentPath = "" // Reset current path to match everything inside the directory
+	}
+	// List files in the directory
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return nil // Return no suggestions if the directory cannot be read
+	}
+
+	// Collect matching files
+	var suggestions []string
+	for _, file := range files {
+		// Construct the file name or path relative to the directory
+		name := file.Name()
+		if currentPath == "" || strings.HasPrefix(name, filepath.Base(currentPath)) {
+			// Append trailing slash if it's a directory
+			if file.IsDir() {
+				suggestions = append(suggestions, filepath.Join(dir, name)+"/")
+			} else {
+				suggestions = append(suggestions, filepath.Join(dir, name))
+			}
+		}
+	}
+
+	return suggestions
+}
 
 // Add this before main()
 func setupReadline() (*readline.Instance, error) {
