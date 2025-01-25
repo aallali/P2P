@@ -218,6 +218,18 @@ func startHost(config Config) {
 			continue
 		}
 
+		logMessage("Connection state: %v\n", connState.isActive())
+		if connState.isActive() {
+			// reject with msg if peer is already connected
+			logMessage("Peer already connected. Rejecting new connection...\n")
+			// send rejection msg to that connection
+			rejectionMessage := Message{Action: "notification", Content: "Peer already connected. Try again later."}
+			encoder := json.NewEncoder(conn)
+			encoder.Encode(rejectionMessage)
+			conn.Close()
+			continue
+		}
+
 		// Extract IP from remote address
 		remoteAddr := conn.RemoteAddr().String()
 		clientIP := strings.Split(remoteAddr, ":")[0]
@@ -272,9 +284,8 @@ func startHost(config Config) {
 		currentConn = conn
 		connMutex.Unlock()
 
-		logMessage("Peer connected and authenticated.\n")
-		// print peer IP
-		logMessage("Peer IP: %s\n", conn.RemoteAddr().String())
+		logMessage("Welcome Peer IP: %s\n", conn.RemoteAddr().String())
+		connState.setConnected(true)
 		// Handle the connection in a new goroutine
 		go handleConnection(config, conn, &connMutex, &currentConn)
 	}
@@ -293,8 +304,8 @@ func connectToHost(config Config) {
 
 		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", config.IP, config.Port))
 		if err != nil {
-			logMessage("Host not available. Retrying in 5 seconds...\n")
-			time.Sleep(5 * time.Second)
+			logMessage("Host not available. Retrying in 3 seconds...\n")
+			time.Sleep(3 * time.Second)
 			continue
 		}
 
@@ -323,7 +334,7 @@ func connectToHost(config Config) {
 		}
 
 		if response.Status != "ok" {
-			logMessage("Authentication failed: Invalid password\n")
+			logMessage("Authentication failed: Invalid password or peer is unavailabe\n")
 			// quit program if invalid password
 
 			conn.Close()
@@ -342,21 +353,14 @@ func connectToHost(config Config) {
 
 func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, currentConn *net.Conn) {
 	defer func() {
-		logMessage("Peer disconnected.\n")
+		logMessage("Peer disconnected.[0]\n")
 		conn.Close()
-
+		connState.setConnected(false)
 		// Clear the current connection if this is the host
-		if connMutex != nil && currentConn != nil {
+		if connMutex != nil {
 			connMutex.Lock()
-			if *currentConn == conn {
-				*currentConn = nil
-			}
+			*currentConn = nil
 			connMutex.Unlock()
-		}
-
-		// Reset connection state for peer
-		if config.Mode == "peer" {
-			connState.setConnected(false)
 		}
 	}()
 
@@ -385,7 +389,7 @@ func handleConnection(config Config, conn net.Conn, connMutex *sync.Mutex, curre
 			message, err := readMessage(reader)
 			if err != nil {
 				if err == io.EOF {
-					logMessage("Peer disconnected.\n")
+					logMessage("Peer disconnected.[1]\n")
 					// Only attempt reconnection if we're a peer and not already connecting
 					if config.Mode == "peer" && !connState.isActive() {
 						go connectToHost(config)
