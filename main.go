@@ -6,7 +6,7 @@
 //   License : MIT                                                            //
 //                                                                            //
 //   Created: 2025/01/24 17:27:43 by aallali                                  //
-//   Updated: 2025/01/25 15:47:58 by aallali                                  //
+//   Updated: 2025/01/25 22:46:16 by aallali                                  //
 // ************************************************************************** //
 
 package main
@@ -25,8 +25,65 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chzyer/readline"
 	"github.com/fsnotify/fsnotify"
 )
+
+// Define completer for auto-completion
+var completer = readline.NewPrefixCompleter(
+	readline.PcItem("/up"),
+	readline.PcItem("/w"),
+	readline.PcItem("/woff"),
+	readline.PcItem("/add"),
+	readline.PcItem("/ls"),
+	readline.PcItem("/cl"),
+	readline.PcItem("/up shared/"),
+)
+
+// Add this before main()
+func setupReadline() (*readline.Instance, error) {
+	historyFile := filepath.Join(os.Getenv("HOME"), ".p2p_history")
+
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:          "\033[31m»\033[0m ",
+		HistoryFile:     historyFile,
+		AutoComplete:    completer,
+		InterruptPrompt: "^C",
+		EOFPrompt:       "exit",
+
+		// Enable history search with Up/Down arrows
+		HistorySearchFold: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rl, nil
+}
+
+// Replace your existing input code with:
+func getInput() (string, error) {
+	rl, err := setupReadline()
+	if err != nil {
+		return "", err
+	}
+	defer rl.Close()
+
+	for {
+		line, err := rl.Readline()
+		if err == readline.ErrInterrupt { // Handle Ctrl+C
+			if len(line) == 0 { // Exit if no input
+				os.Exit(1)
+			}
+			continue // Otherwise, ignore and prompt again
+		} else if err == io.EOF { // Handle Ctrl+D
+			os.Exit(1)
+		}
+		if err != nil {
+			return "", err
+		}
+		return line, nil // Return user input
+	}
+}
 
 const (
 	ConfigFile = "config.json"
@@ -496,14 +553,19 @@ func handleConnection(config Config) {
 		}
 	}()
 
-	scanner := bufio.NewScanner(os.Stdin)
 	go func() {
-		for scanner.Scan() {
+		for {
 			select {
 			case <-quit:
 				return
 			default:
-				command := scanner.Text()
+
+				command, err := getInput()
+				if err != nil {
+					logMessage("error getting input: %v\n", err)
+					os.Exit(1)
+					return
+				}
 				parts := strings.Fields(command)
 				if len(parts) == 0 {
 					continue
