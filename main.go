@@ -581,18 +581,22 @@ func handleConnection(config Config) {
 						fileManager.Mutex.Unlock()
 					}
 					if err := watcher.Add(filePath); err != nil {
-						logMessage("Error watching file: %v\n", err)
-					} else {
-						logMessage("Now watching: %s\n", filePath)
-						fileManager.Mutex.Lock()
-						for i := range fileManager.Files {
-							if fileManager.Files[i].Path == filePath {
-								fileManager.Files[i].Watched = true
-								break
-							}
+						watcher, err = fsnotify.NewWatcher()
+						logMessage("Creating new watcher...\n")
+						if err != nil {
+							logMessage("Error creating watcher: %v\n", err)
+							continue
 						}
-						fileManager.Mutex.Unlock()
 					}
+					logMessage("Now watching: %s\n", filePath)
+					fileManager.Mutex.Lock()
+					for i := range fileManager.Files {
+						if fileManager.Files[i].Path == filePath {
+							fileManager.Files[i].Watched = true
+							break
+						}
+					}
+					fileManager.Mutex.Unlock()
 
 				case "/woff":
 					if len(parts) < 2 {
@@ -704,6 +708,21 @@ Available commands:
 					continue
 				}
 				lastEventTime = time.Now()
+
+				// Ensure the file is fully written before uploading
+				time.Sleep(100 * time.Millisecond) // Small delay to allow file write to complete
+
+				// Check file size before uploading
+				fileInfo, err := os.Stat(filePath)
+				if err != nil {
+					logMessage("Error getting file info: %v\n", err)
+					continue
+				}
+
+				if fileInfo.Size() == 0 {
+					logMessage("File is empty, skipping upload: %s\n", filePath)
+					continue
+				}
 
 				if err := sendFileWithProgress(filePath); err != nil {
 					logMessage("Error uploading file: %v\n", err)
