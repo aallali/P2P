@@ -6,7 +6,7 @@
 //   License : MIT                                                            //
 //                                                                            //
 //   Created: 2025/01/24 17:27:43 by aallali                                  //
-//   Updated: 2025/01/26 00:07:45 by aallali                                  //
+//   Updated: 2025/01/26 23:17:47 by aallali                                  //
 // ************************************************************************** //
 
 package main
@@ -87,7 +87,7 @@ func setupReadline() (*readline.Instance, error) {
 	historyFile := filepath.Join(os.Getenv("HOME"), ".p2p_history")
 
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:          "\033[31m»\033[0m ",
+		Prompt:          "\033[34m»»\033[0m",
 		HistoryFile:     historyFile,
 		AutoComplete:    completer,
 		InterruptPrompt: "^C",
@@ -306,7 +306,7 @@ func loadConfig() Config {
 		}
 		configData, _ := json.MarshalIndent(defaultConfig, "", "  ")
 		os.WriteFile(ConfigFile, configData, 0644)
-		fmt.Printf("Config file created. Edit '%s' and rerun.\n", ConfigFile)
+		logMessage("Config file created. Edit '%s' and rerun.\n", ConfigFile)
 		os.Exit(0)
 	}
 
@@ -583,10 +583,19 @@ func handleConnection(config Config) {
 					}
 
 					assembly.ReceivedSize += int64(len(content))
-					logMessage("\rDownloading %s: %d/%d bytes (%d%%)",
+
+					mb := struct {
+						Received float64
+						Total    float64
+					}{
+						Received: float64(assembly.ReceivedSize) / (1024 * 1024),
+						Total:    float64(assembly.TotalSize) / (1024 * 1024),
+					}
+
+					fmt.Printf("\rDown %s: %.2f/%.2f Mb (%d%%)",
 						message.Path,
-						assembly.ReceivedSize,
-						assembly.TotalSize,
+						mb.Received,
+						mb.Total,
 						(assembly.ReceivedSize*100)/assembly.TotalSize,
 					)
 
@@ -597,7 +606,7 @@ func handleConnection(config Config) {
 							os.Remove(assembly.TempFile.Name())
 						} else {
 							fmt.Println()
-							logMessage("File saved: %s\n", filePath)
+							logMessage("File saved: %s [%d B]\n", filePath, assembly.TotalSize)
 						}
 
 						assemblyMutex.Lock()
@@ -922,14 +931,21 @@ func sendFileWithProgress(filePath string) error {
 		}
 
 		sentBytes += int64(n)
-		logMessage("\rUploading: %d/%d bytes (%d%%)", sentBytes, totalSize, (sentBytes*100)/totalSize)
+		mb := struct {
+			Sent  float64
+			Total float64
+		}{
+			Sent:  float64(sentBytes) / (1024 * 1024),
+			Total: float64(totalSize) / (1024 * 1024),
+		}
+		fmt.Printf("\rUp: %.2f/%.2f mb (%d%%)", mb.Sent, mb.Total, (sentBytes*100)/totalSize)
 	}
 
 	if sentBytes != totalSize {
 		return fmt.Errorf("incomplete transfer: sent %d/%d bytes", sentBytes, totalSize)
 	}
-
-	logMessage("\nFile transfer completed: %s (%d bytes)\n", filepath.Base(filePath), totalSize)
+	fmt.Println()
+	logMessage("File transfer completed: %s (%d bytes)\n", filepath.Base(filePath), totalSize)
 	return nil
 }
 
