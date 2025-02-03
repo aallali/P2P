@@ -6,7 +6,7 @@
 //   License : MIT                                                            //
 //                                                                            //
 //   Created: 2025/01/24 17:27:43 by aallali                                  //
-//   Updated: 2025/01/26 23:17:47 by aallali                                  //
+//   Updated: 2025/02/03 18:54:42 by aallali                                  //
 // ************************************************************************** //
 
 package main
@@ -28,6 +28,8 @@ import (
 	"github.com/chzyer/readline"
 	"github.com/fsnotify/fsnotify"
 )
+
+const VERSION = "2.1.3"
 
 // Define completer for auto-completion
 var completer = readline.NewPrefixCompleter(
@@ -87,7 +89,7 @@ func setupReadline() (*readline.Instance, error) {
 	historyFile := filepath.Join(os.Getenv("HOME"), ".p2p_history")
 
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:          "\033[34m»»\033[0m",
+		Prompt:          "(p2p-" + VERSION + ") 🛰️  ➜ ",
 		HistoryFile:     historyFile,
 		AutoComplete:    completer,
 		InterruptPrompt: "^C",
