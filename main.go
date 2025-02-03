@@ -6,7 +6,7 @@
 //   License : MIT                                                            //
 //                                                                            //
 //   Created: 2025/01/24 17:27:43 by aallali                                  //
-//   Updated: 2025/02/03 18:54:42 by aallali                                  //
+//   Updated: 2025/02/03 19:01:47 by aallali                                  //
 // ************************************************************************** //
 
 package main
@@ -594,7 +594,7 @@ func handleConnection(config Config) {
 						Total:    float64(assembly.TotalSize) / (1024 * 1024),
 					}
 
-					fmt.Printf("\rDown %s: %.2f/%.2f Mb (%d%%)",
+					fmt.Printf("\r📥 Down %s: %.2f/%.2f Mb (%d%%)",
 						message.Path,
 						mb.Received,
 						mb.Total,
@@ -746,7 +746,7 @@ func handleConnection(config Config) {
 							continue
 						}
 					}
-					logMessage("Now watching: %s\n", filePath)
+					logMessage("🕵️ Now watching: %s\n", filePath)
 					fileManager.Mutex.Lock()
 					for i := range fileManager.Files {
 						if fileManager.Files[i].Path == filePath {
@@ -940,7 +940,7 @@ func sendFileWithProgress(filePath string) error {
 			Sent:  float64(sentBytes) / (1024 * 1024),
 			Total: float64(totalSize) / (1024 * 1024),
 		}
-		fmt.Printf("\rUp: %.2f/%.2f mb (%d%%)", mb.Sent, mb.Total, (sentBytes*100)/totalSize)
+		fmt.Printf("\r📤 Up: %.2f/%.2f mb (%d%%)", mb.Sent, mb.Total, (sentBytes*100)/totalSize)
 	}
 
 	if sentBytes != totalSize {
