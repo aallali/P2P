@@ -29,9 +29,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-const VERSION = "2.1.3"
+const VERSION = "2.1.4"
 
-// Define completer for auto-completion
 var completer = readline.NewPrefixCompleter(
 	readline.PcItem("/up", readline.PcItemDynamic(filePathCompleter)),
 	readline.PcItem("/w", readline.PcItemDynamic(filePathCompleter)),
@@ -41,50 +40,34 @@ var completer = readline.NewPrefixCompleter(
 	readline.PcItem("/cl"),
 )
 
-// File path completer
 func filePathCompleter(line string) []string {
-	// Split the line into command and argument
-	cmd, argument := parseCommand(line)
+	cmd, arg := parseCommand(line)
 	if cmd == "" {
 		return nil
 	}
-
-	// Get the current input path
-	currentPath := argument
-
-	// Get the directory to search
-	dir := filepath.Dir(currentPath)
-
-	// Check if the current path is a directory and traverse into it if needed
-	if strings.HasSuffix(currentPath, "/") {
-		dir = currentPath
-		currentPath = "" // Reset current path to match everything inside the directory
+	dir, prefix := filepath.Dir(arg), filepath.Base(arg)
+	if strings.HasSuffix(arg, "/") {
+		dir, prefix = arg, ""
 	}
-	// List files in the directory
-	files, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil // Return no suggestions if the directory cannot be read
+		return nil
 	}
-
-	// Collect matching files
 	var suggestions []string
-	for _, file := range files {
-		// Construct the file name or path relative to the directory
-		name := file.Name()
-		if currentPath == "" || strings.HasPrefix(name, filepath.Base(currentPath)) {
-			// Append trailing slash if it's a directory
-			if file.IsDir() {
-				suggestions = append(suggestions, filepath.Join(dir, name)+"/")
+	for _, e := range entries {
+		name := e.Name()
+		if prefix == "" || strings.HasPrefix(name, prefix) {
+			p := filepath.Join(dir, name)
+			if e.IsDir() {
+				suggestions = append(suggestions, p+"/")
 			} else {
-				suggestions = append(suggestions, filepath.Join(dir, name))
+				suggestions = append(suggestions, p)
 			}
 		}
 	}
-
 	return suggestions
 }
 
-// Add this before main()
 func setupReadline() (*readline.Instance, error) {
 	historyFile := filepath.Join(os.Getenv("HOME"), ".p2p_history")
 
@@ -104,7 +87,6 @@ func setupReadline() (*readline.Instance, error) {
 	return rl, nil
 }
 
-// Replace your existing input code with:
 func getInput() (string, error) {
 	rl, err := setupReadline()
 	if err != nil {
@@ -115,7 +97,7 @@ func getInput() (string, error) {
 	for {
 		line, err := rl.Readline()
 		if err == readline.ErrInterrupt { // Handle Ctrl+C
-			if len(line) == 0 { // Exit if no input
+			if len(line) == 0 {
 				os.Exit(1)
 			}
 			continue // Otherwise, ignore and prompt again
@@ -125,30 +107,25 @@ func getInput() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return line, nil // Return user input
+		return line, nil
 	}
 }
 
 func parseCommand(input string) (string, string) {
-	// Trim the input to remove leading/trailing spaces
 	input = strings.TrimSpace(input)
 
-	// Split the input into parts, but handle quoted arguments
 	parts := strings.Fields(input)
 
 	if len(parts) == 0 {
 		return "", ""
 	}
-	// First part is the command
 	command := parts[0]
 
-	// Combine the rest as the second argument
 	argument := strings.Join(parts[1:], " ")
 
 	if argument == "" {
 		return command, argument
 	}
-	// Remove quotes from the argument if it starts and ends with them
 	if len(argument) > 0 && argument[0] == '"' && argument[len(argument)-1] == '"' {
 		argument = argument[1 : len(argument)-1]
 	}
@@ -162,7 +139,6 @@ const (
 	ChunkSize  = 1024 * 1024 // 1MB chunks
 )
 
-// Config structure
 type Config struct {
 	Mode        string `json:"mode"` // "host" or "peer"
 	IP          string `json:"ip"`
@@ -172,7 +148,6 @@ type Config struct {
 	WhitelistIP string `json:"peer_ip"` // Added whitelist IP field
 }
 
-// Message structure
 type Message struct {
 	Action    string `json:"action"`    // "upload", "notification"
 	Path      string `json:"path"`      // File path
@@ -180,27 +155,23 @@ type Message struct {
 	TotalSize int64  `json:"totalSize"` // Total file size
 }
 
-// Add new message type for authentication
 type AuthMessage struct {
 	Password string `json:"password"`
 	Status   string `json:"status"` // "ok" or "failed"
 }
 
-// FileEntry represents a file in memory
 type FileEntry struct {
 	Path    string // Full path of the file
 	Size    int64  // Size of the file
 	Watched bool   // Whether the file is being watched
 }
 
-// FileManager manages the list of files
 type FileManager struct {
 	Files []FileEntry
 	Mutex sync.Mutex
 }
 
 func removeFileEntry(filePath string) {
-	// remove file from list if upload failed
 	fileManager.Mutex.Lock()
 	for i, file := range fileManager.Files {
 		if file.Path == filePath {
@@ -211,7 +182,6 @@ func removeFileEntry(filePath string) {
 	fileManager.Mutex.Unlock()
 }
 
-// Add new type for connection state management
 type ConnectionState struct {
 	isConnected bool
 	mutex       sync.Mutex
@@ -229,10 +199,8 @@ func (cs *ConnectionState) isActive() bool {
 	return cs.isConnected
 }
 
-// Add global connection state
 var connState = ConnectionState{}
 
-// Add new types and globals for IP jailing
 type IPJail struct {
 	attempts map[string]int
 	jailed   map[string]time.Time
@@ -249,13 +217,10 @@ var ipJail = IPJail{
 	jailed:   make(map[string]time.Time),
 }
 
-// CurrentConn holds the active network connection
 var CurrentConn net.Conn
 
-// ConnMutex guards access to CurrentConn
 var ConnMutex sync.Mutex
 
-// Add methods for IP jailing
 func (j *IPJail) incrementAttempt(ip string) int {
 	j.mutex.Lock()
 	defer j.mutex.Unlock()
@@ -283,14 +248,12 @@ func (j *IPJail) isJailed(ip string) bool {
 	return false
 }
 
-// Add new type for file assembly
 type FileAssembly struct {
 	TotalSize    int64
 	ReceivedSize int64
 	TempFile     *os.File
 }
 
-// Add map to track file assemblies
 var (
 	fileAssemblies = make(map[string]*FileAssembly)
 	assemblyMutex  sync.Mutex
@@ -325,19 +288,16 @@ func loadConfig() Config {
 	return config
 }
 
-// Add helper function to validate IP
 func isIPAllowed(config Config, remoteAddr string) bool {
 	if config.WhitelistIP == "" {
-		return true // Accept any IP if whitelist is empty
+		return true
 	}
 
-	// Extract IP from remoteAddr (removes port)
 	clientIP := strings.Split(remoteAddr, ":")[0]
 	return clientIP == config.WhitelistIP
 }
 
 func authenticateConnection(expectedPassword string) bool {
-	// Set a timeout for authentication
 	CurrentConn.SetDeadline(time.Now().Add(10 * time.Second))
 	defer CurrentConn.SetDeadline(time.Time{})
 
@@ -347,7 +307,6 @@ func authenticateConnection(expectedPassword string) bool {
 		return false
 	}
 
-	// Send authentication response
 	response := AuthMessage{Status: "failed"}
 	if authMessage.Password == expectedPassword {
 		response.Status = "ok"
@@ -375,9 +334,7 @@ func startHost(config Config) {
 
 		logMessage("Connection state: %v\n", connState.isActive())
 		if connState.isActive() {
-			// reject with msg if peer is already connected
 			logMessage("Peer already connected. Rejecting new connection...\n")
-			// send rejection msg to that connection
 			rejectionMessage := Message{Action: "notification", Content: "Peer already connected. Try again later."}
 			encoder := json.NewEncoder(CurrentConn)
 			encoder.Encode(rejectionMessage)
@@ -385,18 +342,15 @@ func startHost(config Config) {
 			continue
 		}
 
-		// Extract IP from remote address
 		remoteAddr := CurrentConn.RemoteAddr().String()
 		clientIP := strings.Split(remoteAddr, ":")[0]
 
-		// Check if IP is jailed
 		if ipJail.isJailed(clientIP) {
 			// logMessage("Connection rejected: IP %s is temporarily blocked\n", clientIP)
 			CurrentConn.Close()
 			continue
 		}
 
-		// Check if IP is allowed
 		if !isIPAllowed(config, remoteAddr) {
 			attempts := ipJail.incrementAttempt(clientIP)
 			remaining := MaxAttempts - attempts
@@ -411,7 +365,6 @@ func startHost(config Config) {
 			continue
 		}
 
-		// Authenticate the connection
 		if !authenticateConnection(config.Password) {
 			attempts := ipJail.incrementAttempt(clientIP)
 			remaining := MaxAttempts - attempts
@@ -426,14 +379,13 @@ func startHost(config Config) {
 			continue
 		}
 
-		// Reset attempts on successful authentication
 		ipJail.mutex.Lock()
 		delete(ipJail.attempts, clientIP)
 		ipJail.mutex.Unlock()
 
 		logMessage("Welcome Peer IP: %s\n", CurrentConn.RemoteAddr().String())
 		connState.setConnected(true)
-		// Handle the connection in a new goroutine
+
 		go handleConnection(config)
 	}
 }
@@ -456,10 +408,8 @@ func connectToHost(config Config) {
 		CurrentConn = conn
 		ConnMutex.Unlock()
 
-		// Set connected state
 		connState.setConnected(true)
 
-		// Send authentication message
 		authMessage := AuthMessage{Password: config.Password}
 		encoder := json.NewEncoder(conn)
 		if err := encoder.Encode(authMessage); err != nil {
@@ -472,7 +422,6 @@ func connectToHost(config Config) {
 			continue
 		}
 
-		// Wait for authentication response
 		var response AuthMessage
 		decoder := json.NewDecoder(conn)
 		if err := decoder.Decode(&response); err != nil {
@@ -488,8 +437,6 @@ func connectToHost(config Config) {
 
 		if response.Status != "ok" {
 			logMessage("Authentication failed: Invalid password or peer is unavailabe\n")
-			// quit program if invalid password
-
 			conn.Close()
 			connState.setConnected(false)
 			os.Exit(1)
@@ -498,9 +445,8 @@ func connectToHost(config Config) {
 		logMessage("Connected and authenticated to host.\n")
 		handleConnection(config)
 
-		// Reset connection state after disconnection
 		connState.setConnected(false)
-		time.Sleep(1 * time.Second) // Add delay before reconnection attempt
+		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -870,7 +816,6 @@ Available commands:
 				// Ensure the file is fully written before uploading
 				time.Sleep(100 * time.Millisecond) // Small delay to allow file write to complete
 
-				// Check file size before uploading
 				fileInfo, err := os.Stat(filePath)
 				if err != nil {
 					logMessage("Error getting file info: %v\n", err)
@@ -983,7 +928,6 @@ func parseIndex(s string) int {
 	return index
 }
 
-// Helper function to check if a file is already in the list
 func (fm *FileManager) contains(filePath string) bool {
 	for _, file := range fm.Files {
 		if file.Path == filePath {
@@ -993,14 +937,12 @@ func (fm *FileManager) contains(filePath string) bool {
 	return false
 }
 
-// Clear the console
 func clearConsole() {
 	cmd := exec.Command("clear") // Use "cls" for Windows
 	cmd.Stdout = os.Stdout
 	cmd.Run()
 }
 
-// Log messages with timestamps
 func logMessage(format string, a ...interface{}) {
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	fmt.Printf("[%s] "+format, append([]interface{}{timestamp}, a...)...)
